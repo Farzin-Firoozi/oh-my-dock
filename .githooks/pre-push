@@ -1,0 +1,9 @@
+#!/bin/sh
+# Run the core test suite before every push. Skip with: git push --no-verify
+echo "pre-push: running make test..." >&2
+if ! make test >/tmp/ohmydock-pre-push.log 2>&1; then
+  tail -30 /tmp/ohmydock-pre-push.log >&2
+  echo "pre-push: tests failed, push aborted (full log: /tmp/ohmydock-pre-push.log)." >&2
+  exit 1
+fi
+echo "pre-push: tests passed." >&2
