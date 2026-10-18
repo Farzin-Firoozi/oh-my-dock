@@ -110,10 +110,11 @@ Each milestone ends with a working, shippable build.
 - [x] `scripts/build-dockutil.sh`: build dockutil v3 from a pinned tag, copy to `App/Resources/Helpers/`, sign with our identity. Add the Apache-2.0 LICENSE/NOTICE.
 - [x] **Spikes** (findings go into technical-notes.md):
   - [x] Can dockutil target a **non-live plist** (temp copy) for safe integration tests? Yes, temp plist file (spike 0.4).
-  - [x] Does `NSRunningApplication.terminate()` need any permission on macOS 14–27? No (spike 0.6).
+  - [x] Does `NSRunningApplication.terminate()` need any permission? Not on macOS 27.0.1, unmanaged machine, CLI + ad-hoc app + ad-hoc hardened app (spike 0.6). macOS 14/15, notarized build, MDM, save sheets/veto, sandboxed targets and `forceTerminate()` untested; see release gates.
   - [x] How URL and folder items appear in `dockutil --list` output, for round-trip parsing? Lossy; reads go through CFPreferences instead (spike 0.5).
 - [x] Empty `MenuBarExtra` app that launches, with `LSUIElement`.
-- [x] Placeholder app icon + menu bar glyph (SF Symbol `dock.rectangle`) until a real icon exists.
+- [x] Menu bar glyph (SF Symbol `dock.rectangle`).
+- [ ] App icon (`AppIcon` asset): pending until a design is chosen. M0 delivered only the menu bar SF Symbol.
 
 **Done when:** the app builds and runs from the menu bar, `make test` and `make build` pass locally, and the bundled dockutil runs from inside the app.
 
@@ -123,7 +124,7 @@ Core:
 - [ ] Models + JSON `ProfileStore` (atomic writes, schemaVersion).
 - [ ] Read Dock via CFPreferences / PropertyListSerialization (see spike 0.5): parse into `[DockItem]`. Resolve `bundleId` via `Bundle(url:)`.
 - [ ] `DiffEngine`: current → target ops (add/remove/move). Unit-tested heavily.
-- [ ] `DockutilBackend.execute(ops)` with `--no-restart`, plus `DockRestarter`.
+- [ ] `DockutilBackend.execute(ops)` with `--no-restart`, plus `DockRestarter`. Verify by re-reading the Dock after every write and comparing to the expected state (dockutil exit 0 does not prove the write happened); canonicalize plist paths; never `--remove spacer-tiles` (see [technical-notes.md](technical-notes.md)).
 - [ ] `SnapshotStore`: copy `com.apple.dock.plist` before each apply. Keep the last N (default 50). Restore via `defaults import com.apple.dock <file>` + restart.
 - [ ] `ProfileApplier` with rollback on failure.
 - [ ] First launch: auto-save the current Dock as the **Default** profile.
@@ -143,9 +144,10 @@ UI:
 
 - [ ] `DockPrefsWriter` via `CFPreferencesSetAppValue` + synchronize, for all keys in features.md §3.
 - [ ] Prefs panel with **live preview** (apply now, revert on Cancel) and Reset to defaults. Prefs are saved per profile.
-- [ ] `AppSwitcher`: compute quit/keep/launch sets and apply the never-quit list. Only `.regular` apps are touched. Graceful `terminate()`, timeout, report stragglers, optional force quit with a warning. Launch with `activates=false` and optionally hidden.
+- [ ] `AppSwitcher`: compute quit/keep/launch sets and apply the never-quit list. Only `.regular` apps are touched. Graceful `terminate()`, timeout, report stragglers explicitly (also handle `terminate() == false`). Force quit never automatic: only after an explicit user action, with a warning, and only after `forceTerminate()` behavior is verified separately. Launch with `activates=false` and optionally hidden.
+  - Tests/QA: save sheet, quit veto / deferral, sandboxed third-party app.
 - [ ] Confirmation sheet ("Will quit / Will open").
-- [ ] No permission needed (spike 0.6); re-verify on notarized build.
+- [ ] No permission needed in the tested scope (spike 0.6); release gate below covers the rest.
 - [ ] `DockutilScriptExporter`: profile → `.sh`. JSON import/export with schema validation.
 
 **Done when:** a switch can quit A's apps, open B's, and apply B's prefs. An exported script reproduces the Dock on a clean user account.
@@ -177,7 +179,11 @@ UI:
 
 ## Release pipeline (set up during M1)
 
-- `scripts/release.sh`: archive, then Developer ID sign (app + dockutil helper, hardened runtime), then `notarytool submit --wait`, then staple, then DMG/zip, then Sparkle appcast.
+- `scripts/release.sh`: archive, then Developer ID sign inside-out (dockutil helper first with `--timestamp` + hardened runtime, then the app), then `notarytool submit --wait`, then staple, then DMG/zip, then Sparkle appcast.
+- **Mandatory release gates** (block any release):
+  - Test quit/launch on macOS 14, 15, and current with the notarized Developer ID build on a clean TCC state (spike 0.6 covered only macOS 27, ad-hoc).
+  - Verify the dockutil license/NOTICE ships in `Contents/Resources`.
+  - Verify the helper is signed with Developer ID + `--timestamp` + hardened runtime before the app is signed.
 - GitHub Release + Homebrew cask (own tap first, e.g. `farzin/tap/oh-my-dock`; submit to `homebrew/cask` once notable). See [distribution.md](distribution.md).
 - Requires an Apple Developer account ($99/yr).
 
@@ -187,7 +193,7 @@ UI:
 |---|---|
 | Models, DiffEngine, exporter, schema validation | Unit tests in `OhMyDockCore` (Swift Testing). Bulk of coverage. |
 | DockBackend | `FakeDockBackend` for applier tests. Integration tests against temp plist **file** fixtures (confirmed, spike 0.4). **Never touch the live Dock in automated tests.** |
-| AppSwitcher | Protocol over `NSWorkspace`/`NSRunningApplication`; fake in tests. Manual QA for real quit/launch. |
+| AppSwitcher | Protocol over `NSWorkspace`/`NSRunningApplication`; fake in tests (incl. `terminate() == false`, timeout, veto/deferral). Manual QA for real quit/launch: save sheet, quit veto, sandboxed third-party app; `forceTerminate()` verified separately. |
 | Triggers | Inject event sources; test debounce and rules. |
 | UI | Manual QA checklist per milestone; snapshot tests optional. |
 
@@ -198,8 +204,9 @@ UI:
 | Corrupting the user's Dock | Snapshot before every apply; automatic rollback; Default profile on first launch |
 | Dock restart flicker on frequent triggers | Batch ops, debounce triggers, skip apply if the diff is empty |
 | macOS update changes the Dock plist format | Isolated behind `DockBackend`; dockutil upstream tracks changes |
-| Permission surprises (Wi-Fi SSID needs Location) | Quit needs none (spike 0.6); Location requested on first use of the Wi-Fi trigger (M3) |
-| Quitting apps loses user work | Graceful terminate only; force quit off by default with a warning; confirmation sheet |
+| Permission surprises (Wi-Fi SSID needs Location) | Quit needs none in the tested scope (spike 0.6; release gate covers macOS 14/15 + notarized build); Location requested on first use of the Wi-Fi trigger (M3) |
+| Quitting apps loses user work | Graceful terminate only; force quit never automatic (explicit user action only, off by default, with a warning); confirmation sheet |
+| dockutil reports success but nothing was written | Re-read the Dock after every write and compare; never trust exit codes |
 
 ## Next action
 

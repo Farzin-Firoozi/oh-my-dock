@@ -45,7 +45,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 1.3 | `DockBackend` protocol + `FakeDockBackend` | Flash-H | B |
 | 1.4 | Read current Dock via CFPreferences/PropertyListSerialization → `[DockItem]`, resolve bundleId | Terra | B |
 | 1.5 | **`DiffEngine`**: minimal add/remove/move ops; heavy tests (duplicates, spacers, missing apps) | **Opus** | C |
-| 1.6 | `DockutilBackend.execute(ops)` `--no-restart` + `DockRestarter` (temp-plist integration tests) | Sonnet | C |
+| 1.6 | `DockutilBackend.execute(ops)` `--no-restart` + `DockRestarter`; verify by re-reading after write, never trust exit codes (temp-plist integration tests) | Sonnet | C |
 | 1.7 | **`SnapshotStore`**: backup before apply, keep last N, restore | **Sol** | C |
 | 1.8 | **`ProfileApplier` actor**: snapshot → diff → execute → restart, rollback, cancel in-flight | **Opus** | D |
 | 1.9 | First-launch Default profile capture | Flash-H | D |
@@ -70,11 +70,15 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 
 | # | Task | Model | Group |
 |---|---|---|---|
-| 3.1 | `scripts/release.sh`: archive, Developer ID sign (app + helper, hardened runtime), notarize, staple, zip | Sonnet | A |
+| 3.1 | `scripts/release.sh`: archive, Developer ID sign (helper first with `--timestamp` + hardened runtime, then app: inside-out), notarize, staple, zip | Sonnet | A |
 | 3.2 | Sparkle integration + appcast generation | Terra | A |
 | 3.3 | `homebrew-tap` cask + GitHub Action bumping version/sha256 | Flash-M | B |
 | 3.4 | README (install, usage) | Haiku | B |
-| 3.R | Security review of the signing/update path: Opus + Sol · Verify: Sonnet | Opus + Sol | C |
+| 3.5 | 🔴 **Release gate:** test quit/launch (`terminate()`, `openApplication`) on macOS 14, 15, and current with the notarized Developer ID build on a clean TCC state (spike 0.6 only covered macOS 27, ad-hoc) | Sonnet | C |
+| 3.6 | **Release gate:** verify the dockutil license/NOTICE ships in `Contents/Resources`; verify helper signature (Developer ID, `--timestamp`, hardened runtime) with `codesign --verify --deep --strict` | Flash-M | C |
+| 3.R | Security review of the signing/update path: Opus + Sol · Verify: Sonnet | Opus + Sol | D |
+
+**Release gates (mandatory, block any release):** 3.5 and 3.6 pass. No release ships quit/launch without 3.5.
 
 **Needs from user:** Apple Developer account, GitHub org/username, bundle ID.
 
@@ -83,10 +87,10 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | # | Task | Model | Group |
 |---|---|---|---|
 | 4.1 | `DockPrefsWriter` (CFPreferences), all §3 keys + tests | Composer | A |
-| 4.3 | **`AppSwitcher`**: quit/keep/launch sets, never-quit list, `.regular` only, graceful terminate + timeout, optional force quit, queued/cancelled switches | **Opus** | A |
+| 4.3 | **`AppSwitcher`**: quit/keep/launch sets, never-quit list, `.regular` only, graceful terminate + timeout, stragglers reported, force quit only on explicit user action, queued/cancelled switches. Tests/QA: save sheet, quit veto / `.terminateLater` deferral, sandboxed third-party app, `terminate() == false`; verify `forceTerminate()` behavior separately before shipping force quit | **Opus** | A |
 | 4.5 | `DockutilScriptExporter` + JSON import/export with strict schema validation | Terra | A |
 | 4.2 | Prefs panel: live preview, revert, reset, per-profile | Sonnet | B |
-| 4.4 | Confirmation sheet (no permission flow needed — spike 0.6) | Flash-H | B |
+| 4.4 | Confirmation sheet (no permission flow needed in the tested scope — spike 0.6; release gate 3.5 still applies) | Flash-H | B |
 | 4.R | Review: Sol (4.2, 4.3; focus data loss), Opus (4.1, 4.4, 4.5) · Verify: Sonnet | Opus + Sol | C |
 
 ## Phase 5: v0.3 (M3)
