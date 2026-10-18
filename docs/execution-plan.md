@@ -27,14 +27,14 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 |---|---|---|---|
 | 0.1 | `project.yml` (XcodeGen), `OhMyDockCore` SwiftPM package + tests, empty `MenuBarExtra` app (`LSUIElement`, SF Symbol `dock.rectangle`) | Sonnet | A |
 | 0.2 | `scripts/build-dockutil.sh`: dockutil v3 from a pinned tag → `App/Resources/Helpers/`, ad-hoc sign; Apache-2.0 LICENSE/NOTICE | Flash-M | A |
-| 0.3 | GitHub Actions CI: `swift test` + `xcodegen` + `xcodebuild build` | Composer | A |
+| 0.3 | ~~GitHub Actions CI~~ dropped (no Xcode 27 on hosted runners); replaced by a local pre-push hook running `make test` | Composer | A |
 | 0.4 | Spike: dockutil on a **temp plist copy** (read-only on the live Dock) | Terra | B |
 | 0.5 | Spike: `dockutil --list` format for apps/URLs/folders/spacers (read-only) | Flash-H | B |
 | 0.6 | 🔴 Spike: `NSRunningApplication.terminate()` permission. Test only on a TextEdit instance the spike launched | Sonnet | B |
 | 0.7 | Write spike findings into `technical-notes.md` | Haiku | C |
 | 0.R | Review: Opus (0.2–0.5), Sol (0.1, 0.6) · Verify: Sonnet | Opus + Sol | D |
 
-**Exit:** app runs in the menu bar, CI green, bundled dockutil runs from the app bundle, spike answers documented.
+**Exit:** app runs in the menu bar, `make test` + `make build` green locally, bundled dockutil runs from the app bundle, spike answers documented.
 
 ## Phase 1: Core engine (M1, logic)
 

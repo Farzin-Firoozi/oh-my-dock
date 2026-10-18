@@ -106,7 +106,7 @@ Each milestone ends with a working, shippable build.
 
 ### M0: Foundations (spike + skeleton)
 
-- [x] `project.yml`, app target, `OhMyDockCore` package, test target. CI on GitHub Actions (`swift test` + `xcodebuild build`).
+- [x] `project.yml`, app target, `OhMyDockCore` package, test target. Local checks: `make test` (pre-push hook) + `make build`. Hosted CI dropped: no Xcode 27 on GitHub runners.
 - [x] `scripts/build-dockutil.sh`: build dockutil v3 from a pinned tag, copy to `App/Resources/Helpers/`, sign with our identity. Add the Apache-2.0 LICENSE/NOTICE.
 - [x] **Spikes** (findings go into technical-notes.md):
   - [x] Can dockutil target a **non-live plist** (temp copy) for safe integration tests? Yes, temp plist file (spike 0.4).
@@ -115,7 +115,7 @@ Each milestone ends with a working, shippable build.
 - [x] Empty `MenuBarExtra` app that launches, with `LSUIElement`.
 - [x] Placeholder app icon + menu bar glyph (SF Symbol `dock.rectangle`) until a real icon exists.
 
-**Done when:** the app builds and runs from the menu bar, CI is green, and the bundled dockutil runs from inside the app.
+**Done when:** the app builds and runs from the menu bar, `make test` and `make build` pass locally, and the bundled dockutil runs from inside the app.
 
 ### M1 (v0.1): Profiles, editor, backup
 
@@ -186,7 +186,7 @@ UI:
 | Layer | How |
 |---|---|
 | Models, DiffEngine, exporter, schema validation | Unit tests in `OhMyDockCore` (Swift Testing). Bulk of coverage. |
-| DockBackend | `FakeDockBackend` for applier tests. Integration tests against temp plist **file** fixtures (confirmed, spike 0.4). **Never touch the live Dock in CI.** |
+| DockBackend | `FakeDockBackend` for applier tests. Integration tests against temp plist **file** fixtures (confirmed, spike 0.4). **Never touch the live Dock in automated tests.** |
 | AppSwitcher | Protocol over `NSWorkspace`/`NSRunningApplication`; fake in tests. Manual QA for real quit/launch. |
 | Triggers | Inject event sources; test debounce and rules. |
 | UI | Manual QA checklist per milestone; snapshot tests optional. |
@@ -203,4 +203,4 @@ UI:
 
 ## Next action
 
-Start **M0**: generate the XcodeGen project, the core package, CI, and the dockutil build script, then run the three spikes.
+Start **M0**: generate the XcodeGen project, the core package, local test hooks, and the dockutil build script, then run the three spikes.
