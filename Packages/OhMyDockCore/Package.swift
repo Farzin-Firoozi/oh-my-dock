@@ -11,7 +11,8 @@ let package = Package(
         .target(name: "OhMyDockCore"),
         .testTarget(
             name: "OhMyDockCoreTests",
-            dependencies: ["OhMyDockCore"]
+            dependencies: ["OhMyDockCore"],
+            resources: [.copy("Fixtures")]
         ),
     ]
 )
