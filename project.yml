@@ -53,7 +53,7 @@ targets:
       base:
         PRODUCT_NAME: OhMyDock
         GENERATE_INFOPLIST_FILE: NO
-        # Required for notarization (Release); kept on in Debug so both behave alike.
+        # Required for notarization (Release). Debug (ad-hoc) builds do not get the runtime flag (flags=0x2(adhoc), not adhoc,runtime), so test hardened-runtime-sensitive behavior on Release builds.
         ENABLE_HARDENED_RUNTIME: YES
     postBuildScripts:
       - name: Embed dockutil
