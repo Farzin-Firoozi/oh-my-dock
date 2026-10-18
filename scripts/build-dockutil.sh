@@ -8,18 +8,22 @@ DOCKUTIL_COMMIT="640c520ce142a5f21e56fda88a95b4e4d6576042"
 CODESIGN_IDENTITY="${CODESIGN_IDENTITY:--}"
 
 FORCE=false
+HOST_ONLY=false
 for arg in "$@"; do
   case "${arg}" in
     --force)
       FORCE=true
       ;;
+    --host-only)
+      HOST_ONLY=true
+      ;;
     -h|--help)
-      echo "Usage: $0 [--force]"
+      echo "Usage: $0 [--force] [--host-only]"
       exit 0
       ;;
     *)
       echo "Unknown argument: ${arg}" >&2
-      echo "Usage: $0 [--force]" >&2
+      echo "Usage: $0 [--force] [--host-only]" >&2
       exit 1
       ;;
   esac
@@ -34,11 +38,22 @@ VERSION_FILE="${TARGET_DIR}/dockutil.version"
 THIRD_PARTY_DIR="${REPO_ROOT}/ThirdParty/dockutil"
 
 EXPECTED_VERSION_CONTENT="${DOCKUTIL_VERSION} ${DOCKUTIL_COMMIT}"
+EXPECTED_VERSION_CONTENT+=" ${CODESIGN_IDENTITY}"
+if [[ "${HOST_ONLY}" == true ]]; then
+  EXPECTED_VERSION_CONTENT+=" host-only"
+fi
 
-# Short-circuit if binary and version match, unless --force was requested
+has_runtime_signature() {
+  local binary="$1"
+  codesign --verify --strict "${binary}" >/dev/null 2>&1 &&
+    codesign -d --verbose=4 "${binary}" 2>&1 | grep -E 'flags=.*runtime' >/dev/null
+}
+
+# Short-circuit only when the full build configuration and hardened signature match.
 if [[ "${FORCE}" == false && -f "${TARGET_BIN}" && -f "${VERSION_FILE}" ]]; then
   CURRENT_VERSION_CONTENT="$(cat "${VERSION_FILE}" 2>/dev/null || true)"
-  if [[ "${CURRENT_VERSION_CONTENT}" == "${EXPECTED_VERSION_CONTENT}" ]]; then
+  if [[ "${CURRENT_VERSION_CONTENT}" == "${EXPECTED_VERSION_CONTENT}" ]] &&
+    has_runtime_signature "${TARGET_BIN}"; then
     echo "dockutil is already built and up to date at ${TARGET_BIN} (${EXPECTED_VERSION_CONTENT})."
     echo "Use --force to rebuild."
     exit 0
@@ -46,10 +61,17 @@ if [[ "${FORCE}" == false && -f "${TARGET_BIN}" && -f "${VERSION_FILE}" ]]; then
 fi
 
 TMP_DIR="$(mktemp -d)"
+INSTALL_TMP=""
+STAMP_TMP=""
 cleanup() {
   rm -rf "${TMP_DIR}"
+  [[ -z "${INSTALL_TMP}" ]] || rm -f "${INSTALL_TMP}"
+  [[ -z "${STAMP_TMP}" ]] || rm -f "${STAMP_TMP}"
 }
 trap cleanup EXIT
+
+# A stamp must never make a failed or differently signed build appear current.
+rm -f "${VERSION_FILE}"
 
 echo "==> Cloning dockutil (${DOCKUTIL_VERSION}) into temporary directory..."
 git clone --depth 1 --branch "${DOCKUTIL_VERSION}" https://github.com/kcrawford/dockutil.git "${TMP_DIR}"
@@ -75,25 +97,33 @@ cd "${TMP_DIR}"
 
 BUILT_BIN=""
 if [[ -f "Package.swift" ]]; then
-  echo "Detected SwiftPM package. Attempting universal binary build (arm64 + x86_64)..."
-  if ! swift build -c release --arch arm64 --arch x86_64; then
-    echo "Warning: Universal build failed. Falling back to host architecture build..." >&2
-    swift build -c release
+  if ! swift build --help 2>&1 | grep -Fq -- "--only-use-versions-from-resolved-file"; then
+    echo "Error: This Swift toolchain does not support --only-use-versions-from-resolved-file" >&2
+    exit 1
+  fi
+  if [[ ! -f "Package.resolved" ]]; then
+    echo "Error: dockutil ${DOCKUTIL_VERSION} does not include Package.resolved; refusing to resolve transitive dependencies unconstrained" >&2
+    exit 1
   fi
 
-  BIN_DIR="$(swift build -c release --show-bin-path 2>/dev/null || true)"
-  if [[ -n "${BIN_DIR}" && -f "${BIN_DIR}/dockutil" ]]; then
-    BUILT_BIN="${BIN_DIR}/dockutil"
+  if [[ "${HOST_ONLY}" == true ]]; then
+    echo "WARNING: Building host-architecture-only dockutil because --host-only was explicitly requested." >&2
+    swift build -c release --only-use-versions-from-resolved-file
   else
-    BUILT_BIN="$(find "${TMP_DIR}/.build" -type f -name dockutil ! -path '*/Objects*' ! -path '*.dSYM*' | head -n 1)"
+    echo "Detected SwiftPM package. Building universal binary (arm64 + x86_64)..."
+    swift build -c release --arch arm64 --arch x86_64 --only-use-versions-from-resolved-file
   fi
+
+  BUILT_BIN="$(find "${TMP_DIR}/.build" -type f -name dockutil ! -path '*/Objects*' ! -path '*.dSYM*' -print -quit)"
 elif compgen -G "./*.xcodeproj" >/dev/null || compgen -G "./*.xcworkspace" >/dev/null; then
-  echo "Detected Xcode project. Attempting universal binary build (arm64 + x86_64)..."
-  if ! xcodebuild -configuration Release ONLY_ACTIVE_ARCH=NO ARCHS="arm64 x86_64" build; then
-    echo "Warning: Universal xcodebuild failed. Falling back to host architecture build..." >&2
+  if [[ "${HOST_ONLY}" == true ]]; then
+    echo "WARNING: Building host-architecture-only dockutil because --host-only was explicitly requested." >&2
     xcodebuild -configuration Release build
+  else
+    echo "Detected Xcode project. Building universal binary (arm64 + x86_64)..."
+    xcodebuild -configuration Release ONLY_ACTIVE_ARCH=NO ARCHS="arm64 x86_64" build
   fi
-  BUILT_BIN="$(find "${TMP_DIR}/build" -type f -name dockutil ! -path '*.dSYM*' | head -n 1)"
+  BUILT_BIN="$(find "${TMP_DIR}/build" -type f -name dockutil ! -path '*.dSYM*' -print -quit)"
 else
   echo "Error: Unrecognized build system in dockutil repository" >&2
   exit 1
@@ -104,15 +134,38 @@ if [[ -z "${BUILT_BIN}" || ! -f "${BUILT_BIN}" ]]; then
   exit 1
 fi
 
-echo "==> Installing binary to ${TARGET_BIN}..."
-mkdir -p "${TARGET_DIR}"
-cp "${BUILT_BIN}" "${TARGET_BIN}"
-chmod +x "${TARGET_BIN}"
+BUILT_ARCHS="$(lipo -archs "${BUILT_BIN}")"
+if [[ "${HOST_ONLY}" == false ]] &&
+  { [[ " ${BUILT_ARCHS} " != *" arm64 "* ]] || [[ " ${BUILT_ARCHS} " != *" x86_64 "* ]]; }; then
+  echo "Error: Universal build did not produce both arm64 and x86_64 architectures (got: ${BUILT_ARCHS}). Use --host-only only when an explicitly host-only helper is acceptable." >&2
+  exit 1
+fi
 
-echo "${EXPECTED_VERSION_CONTENT}" > "${VERSION_FILE}"
+echo "==> Signing and atomically installing binary to ${TARGET_BIN}..."
+mkdir -p "${TARGET_DIR}"
+INSTALL_TMP="$(mktemp "${TARGET_DIR}/.dockutil.XXXXXX")"
+cp "${BUILT_BIN}" "${INSTALL_TMP}"
+chmod +x "${INSTALL_TMP}"
 
 echo "==> Signing binary with identity '${CODESIGN_IDENTITY}'..."
-codesign --force --sign "${CODESIGN_IDENTITY}" --options runtime "${TARGET_BIN}"
+CODESIGN_ARGS=(--force --sign "${CODESIGN_IDENTITY}" --options runtime)
+if [[ "${CODESIGN_IDENTITY}" != "-" ]]; then
+  CODESIGN_ARGS+=(--timestamp)
+fi
+codesign "${CODESIGN_ARGS[@]}" "${INSTALL_TMP}"
+
+if ! has_runtime_signature "${INSTALL_TMP}"; then
+  echo "Error: Signed dockutil failed strict verification or is missing the runtime flag" >&2
+  exit 1
+fi
+
+mv -f "${INSTALL_TMP}" "${TARGET_BIN}"
+INSTALL_TMP=""
+
+STAMP_TMP="$(mktemp "${TARGET_DIR}/.dockutil.version.XXXXXX")"
+printf '%s\n' "${EXPECTED_VERSION_CONTENT}" > "${STAMP_TMP}"
+mv -f "${STAMP_TMP}" "${VERSION_FILE}"
+STAMP_TMP=""
 
 echo "==> dockutil build completed successfully."
 echo "==> Binary architecture info:"
