@@ -46,7 +46,7 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 - **Quit permission**: if `NSRunningApplication.terminate()` needs Accessibility/Automation permission on current macOS, request it **on first use**, when the user first enables quit-on-switch. Never at onboarding.
 - **Lock Dock to display**: shelved for the v0.4+ research bucket. Ship without it.
-- **Profile format**: **JSON** (native `Codable`, no dependency) for storage and import/export.
+- **Profile format**: **JSON** (native `Codable`, no dependency) for storage and import/export. From v0.1, every app item stores `bundleId` (plus optional `brewCask` / `appStoreId`), not just a path. The gallery depends on this.
 
 - **Dock backend**: **bundle `dockutil`** inside the app, behind a `DockBackend` protocol so native plist editing can replace it later.
 
