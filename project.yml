@@ -29,6 +29,14 @@ targets:
       - path: App
         excludes:
           - Resources/Helpers
+      # Apache-2.0 §4(a): ship dockutil's license + notices inside the app.
+      - path: ThirdParty/dockutil/LICENSE
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: ThirdParty/dockutil
+      - path: THIRD_PARTY_NOTICES.md
+        buildPhase: resources
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore
@@ -45,7 +53,8 @@ targets:
       base:
         PRODUCT_NAME: OhMyDock
         GENERATE_INFOPLIST_FILE: NO
-        ENABLE_HARDENED_RUNTIME: NO
+        # Required for notarization (Release); kept on in Debug so both behave alike.
+        ENABLE_HARDENED_RUNTIME: YES
     postBuildScripts:
       - name: Embed dockutil
         basedOnDependencyAnalysis: true
@@ -61,7 +70,13 @@ targets:
             cp -f "$SRC" "$DEST"
             chmod +x "$DEST"
           else
-            echo "warning: dockutil not built — run scripts/build-dockutil.sh"
+            # Never leave a stale helper from a previous build in the bundle.
+            rm -f "$DEST"
+            if [ "$CONFIGURATION" = "Release" ] || [ "$ACTION" = "install" ]; then
+              echo "error: dockutil not built — run make dockutil"
+              exit 1
+            fi
+            echo "warning: dockutil not built — run make dockutil"
           fi
 
 schemes:

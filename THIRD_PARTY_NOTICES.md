@@ -12,3 +12,5 @@ This project incorporates components from third-party open source software.
 
 ### Redistribution Statement
 `dockutil` is redistributed unmodified as a precompiled binary helper bundled at `OhMyDock.app/Contents/Helpers/dockutil`.
+
+The license text ships inside the app at `OhMyDock.app/Contents/Resources/ThirdParty/dockutil/LICENSE`.
