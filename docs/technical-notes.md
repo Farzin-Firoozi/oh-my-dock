@@ -22,7 +22,9 @@ Split by operation, behind a `DockBackend` protocol:
 Write rules (from [spike 0.4](spikes/0.4-dockutil-temp-plist.md) source review of dockutil 3.1.3):
 
 - **Verify by re-reading.** After every write, re-read the Dock and compare to the expected state. Never trust dockutil's exit code: it exits 0 even when `defaults import` failed (e.g. read-only plist).
-- **Never `--remove spacer-tiles`.** It crashes (SIGTRAP) with several spacers and saves nothing. Remove spacers one at a time by position / GUID-equivalent.
+- **Never `--remove spacer-tiles`.** It crashes (SIGTRAP) with several spacers and saves nothing. dockutil 3.1.3 cannot remove a spacer by position: spacers have no label or URL, so `--remove ""` fails. Removing spacers needs one of two paths:
+  - **Direct plist edit**: delete the tile from `persistent-apps` / `persistent-others` through CFPreferences on the live Dock, then re-read the Dock to verify, and restart the Dock once.
+  - **Full rewrite**: `--remove all`, then re-add every tile, all with `--no-restart`, with one Dock restart at the end.
 - **Canonicalize plist paths** with `resolvingSymlinksInPath().standardized`. dockutil's live-plist check is a lowercased string compare, so an aliasing path (symlink, `..`, `//`) would be treated as non-live and `defaults import` into the live domain without a restart. Refuse any path that resolves to the live plist except through the explicit live-write code path.
 - **Always pass absolute item paths.** `~` expands relative to the plist path (`--add '~/Downloads' "$P"` adds `$P/Downloads`).
 - **Sudo hop.** Non-live writes run `/usr/bin/sudo -u #<owner uid> /usr/bin/defaults import`. Same-user sudo needs no password, but an MDM-locked sudoers could break it. dockutil always prints "not running as the user of this Dock nor root" in this mode.

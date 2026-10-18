@@ -9,7 +9,7 @@ When the user switches from profile **A** to profile **B**, oh-my-dock can close
    - **Keep** = apps in both A and B (left running, untouched)
    - **Launch** = apps in B marked *launch on switch* that aren't running
 2. **Confirm** (if enabled): a sheet lists "Will quit: Slack, Figma — Will open: Xcode, Terminal", with a "Don't ask again" checkbox.
-3. **Quit gracefully** with `NSRunningApplication.terminate()`. This is the same as ⌘Q, so apps still show "Save changes?" dialogs and no work is lost.
+3. **Quit gracefully** with `NSRunningApplication.terminate()`. This is the same as ⌘Q: save prompts and quit vetoes are honored. Outcome depends on the target app; apps that don't quit are reported as stragglers (step 4).
 4. **Wait** up to a timeout (default 10 s). Apps still running, typically because a save dialog is open, are left alone and reported in a notification.
 5. **Launch** B's apps with `NSWorkspace.openApplication(at:configuration:)`. They open in the background by default (`activates = false`) so they don't steal focus.
 6. **Apply** B's Dock layout and preferences, then restart the Dock once.
