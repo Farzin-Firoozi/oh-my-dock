@@ -106,14 +106,14 @@ Each milestone ends with a working, shippable build.
 
 ### M0: Foundations (spike + skeleton)
 
-- [ ] `project.yml`, app target, `OhMyDockCore` package, test target. CI on GitHub Actions (`swift test` + `xcodebuild build`).
-- [ ] `scripts/build-dockutil.sh`: build dockutil v3 from a pinned tag, copy to `App/Resources/Helpers/`, sign with our identity. Add the Apache-2.0 LICENSE/NOTICE.
-- [ ] **Spikes** (findings go into technical-notes.md):
-  - Can dockutil target a **non-live plist** (temp copy) for safe integration tests?
-  - Does `NSRunningApplication.terminate()` need any permission on macOS 14–27?
-  - How URL and folder items appear in `dockutil --list` output, for round-trip parsing.
-- [ ] Empty `MenuBarExtra` app that launches, with `LSUIElement`.
-- [ ] Placeholder app icon + menu bar glyph (SF Symbol `dock.rectangle`) until a real icon exists.
+- [x] `project.yml`, app target, `OhMyDockCore` package, test target. CI on GitHub Actions (`swift test` + `xcodebuild build`).
+- [x] `scripts/build-dockutil.sh`: build dockutil v3 from a pinned tag, copy to `App/Resources/Helpers/`, sign with our identity. Add the Apache-2.0 LICENSE/NOTICE.
+- [x] **Spikes** (findings go into technical-notes.md):
+  - [x] Can dockutil target a **non-live plist** (temp copy) for safe integration tests? Yes, temp plist file (spike 0.4).
+  - [x] Does `NSRunningApplication.terminate()` need any permission on macOS 14–27? No (spike 0.6).
+  - [x] How URL and folder items appear in `dockutil --list` output, for round-trip parsing? Lossy; reads go through CFPreferences instead (spike 0.5).
+- [x] Empty `MenuBarExtra` app that launches, with `LSUIElement`.
+- [x] Placeholder app icon + menu bar glyph (SF Symbol `dock.rectangle`) until a real icon exists.
 
 **Done when:** the app builds and runs from the menu bar, CI is green, and the bundled dockutil runs from inside the app.
 
@@ -121,7 +121,7 @@ Each milestone ends with a working, shippable build.
 
 Core:
 - [ ] Models + JSON `ProfileStore` (atomic writes, schemaVersion).
-- [ ] `DockutilBackend.read()`: parse the current Dock into `[DockItem]`. Resolve `bundleId` via `Bundle(url:)`.
+- [ ] Read Dock via CFPreferences / PropertyListSerialization (see spike 0.5): parse into `[DockItem]`. Resolve `bundleId` via `Bundle(url:)`.
 - [ ] `DiffEngine`: current → target ops (add/remove/move). Unit-tested heavily.
 - [ ] `DockutilBackend.execute(ops)` with `--no-restart`, plus `DockRestarter`.
 - [ ] `SnapshotStore`: copy `com.apple.dock.plist` before each apply. Keep the last N (default 50). Restore via `defaults import com.apple.dock <file>` + restart.
@@ -145,7 +145,7 @@ UI:
 - [ ] Prefs panel with **live preview** (apply now, revert on Cancel) and Reset to defaults. Prefs are saved per profile.
 - [ ] `AppSwitcher`: compute quit/keep/launch sets and apply the never-quit list. Only `.regular` apps are touched. Graceful `terminate()`, timeout, report stragglers, optional force quit with a warning. Launch with `activates=false` and optionally hidden.
 - [ ] Confirmation sheet ("Will quit / Will open").
-- [ ] Request permission on first use, if the M0 spike showed one is needed.
+- [ ] No permission needed (spike 0.6); re-verify on notarized build.
 - [ ] `DockutilScriptExporter`: profile → `.sh`. JSON import/export with schema validation.
 
 **Done when:** a switch can quit A's apps, open B's, and apply B's prefs. An exported script reproduces the Dock on a clean user account.
@@ -186,7 +186,7 @@ UI:
 | Layer | How |
 |---|---|
 | Models, DiffEngine, exporter, schema validation | Unit tests in `OhMyDockCore` (Swift Testing). Bulk of coverage. |
-| DockBackend | `FakeDockBackend` for applier tests. Integration tests against a **temp plist copy** if the M0 spike confirms dockutil supports it. **Never touch the live Dock in CI.** |
+| DockBackend | `FakeDockBackend` for applier tests. Integration tests against temp plist **file** fixtures (confirmed, spike 0.4). **Never touch the live Dock in CI.** |
 | AppSwitcher | Protocol over `NSWorkspace`/`NSRunningApplication`; fake in tests. Manual QA for real quit/launch. |
 | Triggers | Inject event sources; test debounce and rules. |
 | UI | Manual QA checklist per milestone; snapshot tests optional. |
@@ -198,7 +198,7 @@ UI:
 | Corrupting the user's Dock | Snapshot before every apply; automatic rollback; Default profile on first launch |
 | Dock restart flicker on frequent triggers | Batch ops, debounce triggers, skip apply if the diff is empty |
 | macOS update changes the Dock plist format | Isolated behind `DockBackend`; dockutil upstream tracks changes |
-| Permission surprises (quit, Wi-Fi SSID needs Location) | M0/M3 spikes; ask on first use only |
+| Permission surprises (Wi-Fi SSID needs Location) | Quit needs none (spike 0.6); Location requested on first use of the Wi-Fi trigger (M3) |
 | Quitting apps loses user work | Graceful terminate only; force quit off by default with a warning; confirmation sheet |
 
 ## Next action

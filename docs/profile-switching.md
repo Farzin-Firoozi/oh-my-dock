@@ -36,7 +36,8 @@ When the user switches from profile **A** to profile **B**, oh-my-dock can close
 - **App not installed**: skipped and flagged (ties into missing-app detection / `brew install --cask`).
 - **Rapid switching**: switches are queued; a newer switch cancels any in-flight one to avoid quit/launch storms.
 - **App refuses to quit** (modal dialog, hung): reported, never force-killed unless force quit is enabled.
+- **Launch timing**: `activates=false` keeps focus on the current app. `hides=true` applies asynchronously: `isHidden` is still `false` in the completion handler and flips to `true` ~1 s later. `NSRunningApplication` state only updates while the run loop runs. Observe `isFinishedLaunching` / `isHidden` / `isTerminated` via KVO, with a timeout, rather than reading them in the callback (see [spike 0.6](spikes/0.6-terminate-permission.md)).
 
 ## Permissions
 
-`terminate()` on regular apps should work from a non-sandboxed app without Accessibility permission. **Needs verification on current macOS during implementation.** If a permission turns out to be required, request it on first use (when the user first enables quit-on-switch), never at onboarding.
+None needed. `terminate()` quits regular apps from a non-sandboxed app with no Accessibility or Automation prompt (verified on macOS 27; see [spike 0.6](spikes/0.6-terminate-permission.md)). Re-verify on the notarized Developer ID build (Phase 3). Never hand-build quit Apple Events / AppleScript: those need Automation consent.

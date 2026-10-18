@@ -43,7 +43,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 1.1 | Models: `Profile`, `DockItem`, `AppRef`, `DockPrefs` (Codable, `schemaVersion`) + tests | Sonnet | A |
 | 1.2 | `ProfileStore`: JSON in Application Support, atomic writes, migration hook + tests | Composer | B |
 | 1.3 | `DockBackend` protocol + `FakeDockBackend` | Flash-H | B |
-| 1.4 | `DockutilBackend.read()`: parse `--list` → `[DockItem]`, resolve `bundleId` | Terra | B |
+| 1.4 | Read current Dock via CFPreferences/PropertyListSerialization → `[DockItem]`, resolve bundleId | Terra | B |
 | 1.5 | **`DiffEngine`**: minimal add/remove/move ops; heavy tests (duplicates, spacers, missing apps) | **Opus** | C |
 | 1.6 | `DockutilBackend.execute(ops)` `--no-restart` + `DockRestarter` (temp-plist integration tests) | Sonnet | C |
 | 1.7 | **`SnapshotStore`**: backup before apply, keep last N, restore | **Sol** | C |
@@ -86,7 +86,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 4.3 | **`AppSwitcher`**: quit/keep/launch sets, never-quit list, `.regular` only, graceful terminate + timeout, optional force quit, queued/cancelled switches | **Opus** | A |
 | 4.5 | `DockutilScriptExporter` + JSON import/export with strict schema validation | Terra | A |
 | 4.2 | Prefs panel: live preview, revert, reset, per-profile | Sonnet | B |
-| 4.4 | Confirmation sheet + first-use permission request | Flash-H | B |
+| 4.4 | Confirmation sheet (no permission flow needed — spike 0.6) | Flash-H | B |
 | 4.R | Review: Sol (4.2, 4.3; focus data loss), Opus (4.1, 4.4, 4.5) · Verify: Sonnet | Opus + Sol | C |
 
 ## Phase 5: v0.3 (M3)

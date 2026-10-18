@@ -13,12 +13,11 @@
 
 ## Dock backend
 
-Two options:
+Split by operation, behind a `DockBackend` protocol:
 
-1. **Bundle `dockutil`** (v3 is Swift, Apache-2.0). Shell out to it. Simple, well-tested.
-2. **Native plist editing** of `persistent-apps` / `persistent-others` in `com.apple.dock` via `CFPreferences`. No external dependency, faster, more control.
-
-Start with option 1 behind a `DockBackend` protocol so it can be swapped for option 2 later.
+- **Reads**: read the Dock directly, not via `dockutil --list`. Live Dock: `CFPreferencesCopyAppValue("persistent-apps" / "persistent-others", "com.apple.dock")`. Fixture files: `PropertyListSerialization`. `--list` drops spacer kinds, folder view/display/sort, and GUIDs, and its tab-delimited output is unescaped. See [spike 0.5](spikes/0.5-dockutil-list-format.md).
+- **Writes**: bundled `dockutil` (v3, Swift, Apache-2.0) only, for `--add` / `--remove` / `--move`, always with `--no-restart`.
+- **Testing**: integration tests run dockutil against a temp plist **file** path, never a directory (dockutil treats a directory as a home dir), with `--no-restart`. dockutil uses CFPreferences only for the exact live plist of the console user; other paths go through `defaults export` / `defaults import`. dockutil rewrites files as binary plists. See [spike 0.4](spikes/0.4-dockutil-temp-plist.md).
 
 Preferences are written via `defaults write com.apple.dock <key>` (or `CFPreferencesSetAppValue` + `CFPreferencesAppSynchronize`).
 
@@ -44,12 +43,12 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 ## Decisions
 
-- **Quit permission**: if `NSRunningApplication.terminate()` needs Accessibility/Automation permission on current macOS, request it **on first use**, when the user first enables quit-on-switch. Never at onboarding.
+- **Quit permission**: none needed. `NSRunningApplication.terminate()` works with no Accessibility or Automation permission on macOS 27 (CLI, ad-hoc app, and hardened-runtime app tested). No first-use prompt. Do **not** add `NSAppleEventsUsageDescription` or the apple-events entitlement, and never hand-build quit Apple Events / AppleScript (those need Automation consent). See [spike 0.6](spikes/0.6-terminate-permission.md).
 - **Lock Dock to display**: shelved for the v0.4+ research bucket. Ship without it.
 - **Profile format**: **JSON** (native `Codable`, no dependency) for storage and import/export. From v0.1, every app item stores `bundleId` (plus optional `brewCask` / `appStoreId`), not just a path. The gallery depends on this.
 
-- **Dock backend**: **bundle `dockutil`** inside the app, behind a `DockBackend` protocol so native plist editing can replace it later.
+- **Dock backend**: reads via CFPreferences / `PropertyListSerialization`; writes via **bundled `dockutil`** inside the app. Both behind a `DockBackend` protocol.
 
 ## Open questions
 
-- Confirm whether `terminate()` needs any permission (verify during implementation).
+- Re-verify `terminate()` needs no permission on a notarized Developer ID build (Phase 3).
