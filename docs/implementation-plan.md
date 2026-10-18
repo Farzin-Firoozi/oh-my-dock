@@ -113,6 +113,7 @@ Each milestone ends with a working, shippable build.
   - Does `NSRunningApplication.terminate()` need any permission on macOS 14–27?
   - How URL and folder items appear in `dockutil --list` output, for round-trip parsing.
 - [ ] Empty `MenuBarExtra` app that launches, with `LSUIElement`.
+- [ ] Placeholder app icon + menu bar glyph (SF Symbol `dock.rectangle`) until a real icon exists.
 
 **Done when:** the app builds and runs from the menu bar, CI is green, and the bundled dockutil runs from inside the app.
 
@@ -177,7 +178,7 @@ UI:
 ## Release pipeline (set up during M1)
 
 - `scripts/release.sh`: archive, then Developer ID sign (app + dockutil helper, hardened runtime), then `notarytool submit --wait`, then staple, then DMG/zip, then Sparkle appcast.
-- GitHub Release + Homebrew cask (own tap first, e.g. `farzin/tap/oh-my-dock`; submit to `homebrew/cask` once notable).
+- GitHub Release + Homebrew cask (own tap first, e.g. `farzin/tap/oh-my-dock`; submit to `homebrew/cask` once notable). See [distribution.md](distribution.md).
 - Requires an Apple Developer account ($99/yr).
 
 ## Testing strategy

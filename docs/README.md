@@ -17,6 +17,7 @@ oh-my-dock **only modifies Apple's real Dock**. It does not draw its own dock, r
 | [profile-gallery.md](profile-gallery.md) | Community profile gallery (GitHub registry), portability, security rules |
 | [roadmap.md](roadmap.md) | MVP and later phases |
 | [implementation-plan.md](implementation-plan.md) | Architecture, data model, milestones M0–M4, testing, release, risks |
+| [distribution.md](distribution.md) | Homebrew tap / cask plan, release checklist |
 
 ## Example of what the app automates
 
