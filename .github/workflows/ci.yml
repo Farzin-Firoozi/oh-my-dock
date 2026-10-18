@@ -1,0 +1,98 @@
+# CI must never touch a live Dock; tests run only against fakes/temp plists.
+
+name: CI
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
+jobs:
+  build-and-test:
+    # Runner image must provide Xcode 27 (Swift 6.x); verify via select-xcode step.
+    runs-on: macos-latest
+    env:
+      XCODE_VERSION: "27"
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Select Xcode
+        run: |
+          set -euo pipefail
+          major="${XCODE_VERSION}"
+          last="$(
+            for app in /Applications/Xcode*.app; do
+              [ -d "$app" ] || continue
+              ver="$(/usr/libexec/PlistBuddy -c 'Print CFBundleShortVersionString' "$app/Contents/Info.plist" 2>/dev/null || true)"
+              [ -n "$ver" ] || continue
+              [ "${ver%%.*}" = "$major" ] || continue
+              printf '%s|%s\n' "$ver" "$app"
+            done | sort -t'|' -k1 -V | tail -n 1
+          )"
+          if [ -z "$last" ]; then
+            echo "::error::No Xcode ${major}.x found under /Applications/Xcode*.app. Install Xcode ${major} on the runner."
+            exit 1
+          fi
+          best_ver="${last%%|*}"
+          best_app="${last#*|}"
+          echo "Selecting $best_app (version $best_ver)"
+          sudo xcode-select -s "$best_app/Contents/Developer"
+          xcodebuild -version
+
+      - name: Install XcodeGen
+        run: brew install xcodegen
+
+      - name: Cache SwiftPM
+        uses: actions/cache@v4
+        with:
+          path: Packages/OhMyDockCore/.build
+          key: spm-${{ runner.os }}-${{ hashFiles('Packages/OhMyDockCore/Package.swift', 'Packages/OhMyDockCore/**/*.swift') }}
+          restore-keys: |
+            spm-${{ runner.os }}-
+
+      - name: Cache dockutil
+        uses: actions/cache@v4
+        with:
+          path: App/Resources/Helpers/dockutil
+          key: dockutil-${{ hashFiles('scripts/build-dockutil.sh') }}
+
+      - name: Build dockutil
+        run: make dockutil
+
+      - name: Test
+        run: make test
+
+      - name: Generate Xcode project
+        run: make generate
+
+      - name: Build app
+        env:
+          CODE_SIGNING_ALLOWED: "NO"
+          CODE_SIGNING_REQUIRED: "NO"
+        run: |
+          xcodebuild \
+            -project OhMyDock.xcodeproj \
+            -scheme OhMyDock \
+            -configuration Debug \
+            -derivedDataPath build \
+            build
+
+      - name: Upload build logs on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-logs-${{ github.run_id }}
+          path: |
+            build/Logs
+            build/**/*.xcresult
+          if-no-files-found: ignore
