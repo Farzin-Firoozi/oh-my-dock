@@ -1,3 +1,4 @@
+import CryptoKit
 import Foundation
 import Testing
 @testable import OhMyDockCore
@@ -133,6 +134,44 @@ import Testing
         #expect(try await store.load(id: safetySnapshot.id) == current)
     }
 
+    @Test func restoreDeletesKeysAbsentFromSnapshot() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let current = try dockPlist(
+            label: "Current",
+            additionalValues: ["recent-apps": [["tile-data": ["file-label": "Extra"]]]]
+        )
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(current)
+
+        try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+
+        #expect(await io.deletedKeys == ["recent-apps"])
+        #expect(try plistDictionary(await io.domainData) == plistDictionary(target))
+    }
+
+    @Test func restoreFailsWhenReadBackDoesNotMatchSnapshot() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(try dockPlist(label: "Current"))
+        await io.setDomainDataAfterImport(try dockPlist(label: "Rewritten by macOS"))
+
+        await #expect(
+            throws: SnapshotStoreError.restoreVerificationFailed(targetSnapshot.id)
+        ) {
+            try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+        }
+    }
+
     @Test func pruneKeepsRequestedUnpinnedSnapshotsAndPinnedSnapshots() async throws {
         let root = try makeTempRoot()
         defer { cleanup(root) }
@@ -162,6 +201,29 @@ import Testing
         try await store.prune(keep: 0)
         result = await store.list()
         #expect(result.snapshots.map(\.id) == [saved[5].id])
+    }
+
+    @Test func saveAutomaticallyPrunesToConfiguredRetentionAndKeepsPinned() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let io = FakeDockDomainIO(domainData: try dockPlist())
+        let clock = TestClock((1...4).map { Date(timeIntervalSince1970: TimeInterval($0)) })
+        let store = SnapshotStore(
+            rootDirectory: root,
+            domainIO: io,
+            retentionLimit: 2,
+            now: { clock.next() }
+        )
+
+        let pinned = try await store.save(reason: "Pinned", pinned: true)
+        let old = try await store.save(reason: "Old")
+        let newer = try await store.save(reason: "Newer")
+        let newest = try await store.save(reason: "Newest")
+
+        let snapshots = await store.list().snapshots
+        #expect(Set(snapshots.map(\.id)) == Set([pinned.id, newer.id, newest.id]))
+        #expect(!snapshots.contains { $0.id == old.id })
     }
 
     @Test func corruptSidecarIsReportedAndPreserved() async throws {
@@ -219,6 +281,55 @@ import Testing
 
         await #expect(throws: SnapshotStoreError.invalidExport(.missingPersistentAppsArray)) {
             try await store.save(reason: "Invalid")
+        }
+    }
+
+    @Test func rejectsExportMissingPersistentOthersArray() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let invalid = try PropertyListSerialization.data(
+            fromPropertyList: ["persistent-apps": []],
+            format: .binary,
+            options: 0
+        )
+        let store = SnapshotStore(
+            rootDirectory: root,
+            domainIO: FakeDockDomainIO(domainData: invalid)
+        )
+
+        await #expect(throws: SnapshotStoreError.invalidExport(.missingPersistentOthersArray)) {
+            try await store.save(reason: "Invalid")
+        }
+    }
+
+    @Test func rejectsRestoreMissingPersistentOthersArray() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let io = FakeDockDomainIO(domainData: try dockPlist())
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        var snapshot = try await store.save(reason: "Legacy")
+        let invalid = try PropertyListSerialization.data(
+            fromPropertyList: ["persistent-apps": []],
+            format: .binary,
+            options: 0
+        )
+        try invalid.write(
+            to: root.appendingPathComponent("\(snapshot.id.uuidString).plist")
+        )
+        snapshot.byteSize = invalid.count
+        snapshot.sha256 = SHA256.hash(data: invalid)
+            .map { String(format: "%02x", $0) }
+            .joined()
+        let encoder = JSONEncoder()
+        encoder.dateEncodingStrategy = .iso8601
+        try encoder.encode(snapshot).write(
+            to: root.appendingPathComponent("\(snapshot.id.uuidString).json")
+        )
+
+        await #expect(throws: SnapshotStoreError.invalidExport(.missingPersistentOthersArray)) {
+            try await store.restore(id: snapshot.id, createSafetySnapshot: false)
         }
     }
 
@@ -282,6 +393,7 @@ import Testing
 
         try await io.exportDomain(to: exportURL)
         try await io.importDomain(from: importURL)
+        try await io.deleteKey("recent-apps")
 
         let invocations = await runner.invocations
         #expect(invocations == [
@@ -293,7 +405,36 @@ import Testing
                 executableURL: URL(fileURLWithPath: "/usr/bin/defaults"),
                 arguments: ["import", "com.apple.dock", "/tmp/import.plist"]
             ),
+            .init(
+                executableURL: URL(fileURLWithPath: "/usr/bin/defaults"),
+                arguments: ["delete", "com.apple.dock", "recent-apps"]
+            ),
         ])
+    }
+
+    @Test func foundationProcessRunnerDrainsLargeOutputAndErrorWithoutDeadlock() async throws {
+        let result = try await FoundationProcessRunner().run(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: [
+                "-c",
+                "yes o | head -c 200000; yes e | head -c 200000 >&2",
+            ]
+        )
+
+        #expect(result.terminationStatus == 0)
+        #expect(result.stdout.utf8.count == 200_000)
+        #expect(result.standardError.utf8.count == 200_000)
+    }
+
+    @Test func foundationProcessRunnerPreservesStdoutOnlyFailureDiagnosis() async throws {
+        let result = try await FoundationProcessRunner().run(
+            executableURL: URL(fileURLWithPath: "/bin/sh"),
+            arguments: ["-c", "printf 'already exists in dock'; exit 1"]
+        )
+
+        #expect(result.terminationStatus == 1)
+        #expect(result.stdout == "already exists in dock")
+        #expect(result.standardError == result.stdout)
     }
 
     private func makeTempRoot() throws -> URL {
@@ -307,16 +448,27 @@ import Testing
         try? FileManager.default.removeItem(at: url)
     }
 
-    private func dockPlist(label: String = "Finder") throws -> Data {
-        try PropertyListSerialization.data(
-            fromPropertyList: [
-                "persistent-apps": [
-                    ["tile-data": ["file-label": label]],
-                ],
-                "persistent-others": [],
+    private func dockPlist(
+        label: String = "Finder",
+        additionalValues: [String: Any] = [:]
+    ) throws -> Data {
+        var dictionary: [String: Any] = [
+            "persistent-apps": [
+                ["tile-data": ["file-label": label]],
             ],
+            "persistent-others": [],
+        ]
+        dictionary.merge(additionalValues) { _, new in new }
+        return try PropertyListSerialization.data(
+            fromPropertyList: dictionary,
             format: .binary,
             options: 0
+        )
+    }
+
+    private func plistDictionary(_ data: Data) throws -> NSDictionary {
+        try #require(
+            PropertyListSerialization.propertyList(from: data, format: nil) as? NSDictionary
         )
     }
 
@@ -328,9 +480,11 @@ import Testing
 }
 
 private actor FakeDockDomainIO: DockDomainIO {
-    private var domainData: Data
+    private(set) var domainData: Data
     private(set) var importedData: Data?
     private(set) var exportCount = 0
+    private(set) var deletedKeys: [String] = []
+    private var domainDataAfterImport: Data?
 
     init(domainData: Data) {
         self.domainData = domainData
@@ -340,6 +494,10 @@ private actor FakeDockDomainIO: DockDomainIO {
         domainData = data
     }
 
+    func setDomainDataAfterImport(_ data: Data) {
+        domainDataAfterImport = data
+    }
+
     func exportDomain(to url: URL) async throws {
         exportCount += 1
         try domainData.write(to: url)
@@ -347,7 +505,33 @@ private actor FakeDockDomainIO: DockDomainIO {
 
     func importDomain(from url: URL) async throws {
         importedData = try Data(contentsOf: url)
-        domainData = importedData!
+        var current = try Self.dictionary(from: domainData)
+        let imported = try Self.dictionary(from: importedData!)
+        current.merge(imported) { _, new in new }
+        domainData = try PropertyListSerialization.data(
+            fromPropertyList: current,
+            format: .binary,
+            options: 0
+        )
+        if let domainDataAfterImport {
+            domainData = domainDataAfterImport
+            self.domainDataAfterImport = nil
+        }
+    }
+
+    func deleteKey(_ key: String) async throws {
+        deletedKeys.append(key)
+        var current = try Self.dictionary(from: domainData)
+        current.removeValue(forKey: key)
+        domainData = try PropertyListSerialization.data(
+            fromPropertyList: current,
+            format: .binary,
+            options: 0
+        )
+    }
+
+    private static func dictionary(from data: Data) throws -> [String: Any] {
+        try PropertyListSerialization.propertyList(from: data, format: nil) as! [String: Any]
     }
 }
 
