@@ -1,9 +1,13 @@
 #!/bin/sh
 # Run the core test suite before every push. Skip with: git push --no-verify
+# This hook tests the working tree, not the exact commits being pushed.
+# Commit or stash local changes before pushing for a meaningful result.
 echo "pre-push: running make test..." >&2
-if ! make test >/tmp/ohmydock-pre-push.log 2>&1; then
-  tail -30 /tmp/ohmydock-pre-push.log >&2
-  echo "pre-push: tests failed, push aborted (full log: /tmp/ohmydock-pre-push.log)." >&2
+LOG="$(mktemp -t ohmydock-pre-push)"
+if ! make test >"$LOG" 2>&1; then
+  tail -30 "$LOG" >&2
+  echo "pre-push: tests failed, push aborted (full log: $LOG)." >&2
   exit 1
 fi
+rm -f "$LOG"
 echo "pre-push: tests passed." >&2
