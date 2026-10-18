@@ -1,0 +1,397 @@
+import AppKit
+import Foundation
+
+// MARK: - Preview
+
+/// An app tile of a profile that was left out of the target because it could not be found.
+public struct SkippedItem: Hashable, Sendable {
+    public enum Reason: Hashable, Sendable {
+        /// The path resolver found neither an installed app for the bundle identifier nor an
+        /// existing `AppRef.path`.
+        case appNotFound
+    }
+
+    public let section: DockSection
+    /// Index of the tile in the profile's section (not in the target).
+    public let index: Int
+    public let app: AppRef
+    public let reason: Reason
+
+    public init(section: DockSection, index: Int, app: AppRef, reason: Reason = .appNotFound) {
+        self.section = section
+        self.index = index
+        self.app = app
+        self.reason = reason
+    }
+}
+
+/// What applying a profile would do, computed without writing anything.
+public struct ApplyPreview: Hashable, Sendable {
+    public let profileName: String
+    /// The Dock when the preview was computed.
+    public let current: DockState
+    /// The profile's layout with resolved app paths and without `skipped` apps.
+    public let target: DockState
+    public let plan: DockPlan
+    public let skipped: [SkippedItem]
+    /// True when the plan is a full rewrite, which also clears the Dock's recent apps. Incremental
+    /// edits leave them alone.
+    public let clearsRecentApps: Bool
+
+    public init(
+        profileName: String,
+        current: DockState,
+        target: DockState,
+        plan: DockPlan,
+        skipped: [SkippedItem]
+    ) {
+        self.profileName = profileName
+        self.current = current
+        self.target = target
+        self.plan = plan
+        self.skipped = skipped
+        self.clearsRecentApps = plan.requiresFullRewrite
+    }
+}
+
+// MARK: - Result
+
+/// A successful apply: the Dock was written, verified and restarted.
+public struct ApplyReport: Hashable, Sendable {
+    public let plan: DockPlan
+    /// The snapshot taken just before writing; the way back to the previous Dock.
+    public let snapshotID: UUID
+    public let skipped: [SkippedItem]
+    public let clearsRecentApps: Bool
+    public let restarted: Bool
+}
+
+public enum ApplyResult: Hashable, Sendable {
+    /// The Dock was changed.
+    case applied(ApplyReport)
+    /// The Dock already matches the profile. Nothing was snapshotted, written or restarted.
+    case noChanges(ApplyPreview)
+    /// The apply was declined by `confirm` or cancelled by a newer apply (or the caller).
+    /// `rolledBack` is true when writing had started and the Dock was restored from the snapshot.
+    /// Either way the Dock is in its previous state.
+    case cancelled(rolledBack: Bool)
+}
+
+public enum ApplyError: Error, LocalizedError, Sendable {
+    case invalidProfile(ProfileValidationError)
+    /// The target cannot be produced. Nothing was written or snapshotted.
+    case unsatisfiable(issues: [DockPlanIssue])
+    /// Writing or restarting failed; the Dock was restored from the snapshot and restarted.
+    case failedAndRolledBack(original: any Error)
+    /// Writing or restarting failed, and so did the rollback. The Dock may be half-written;
+    /// `snapshotID` is the backup to restore from.
+    case rollbackFailed(original: any Error, rollback: any Error, snapshotID: UUID)
+
+    public var errorDescription: String? {
+        switch self {
+        case let .invalidProfile(error):
+            "The profile is invalid: \(error)"
+        case let .unsatisfiable(issues):
+            "The profile cannot be applied: \(issues.map(\.message).joined(separator: "; "))"
+        case let .failedAndRolledBack(original):
+            "Applying the profile failed and the previous Dock was restored: \(original)"
+        case let .rollbackFailed(original, rollback, snapshotID):
+            "Applying the profile failed (\(original)) and restoring the previous Dock failed too (\(rollback)). "
+                + "The Dock may be inconsistent; restore snapshot \(snapshotID.uuidString) from the backups."
+        }
+    }
+}
+
+// MARK: - Applier
+
+/// Applies a profile to the Dock and always leaves the Dock in a known state: the profile's, or
+/// (after any failure or cancellation once writing started) the snapshot taken just before.
+///
+/// Flow of `apply`:
+/// 1. Validate the profile, resolve app paths, read the Dock and plan the change.
+/// 2. Unsatisfiable plan: throw. Empty plan: `.noChanges`. No snapshot, no restart.
+/// 3. `confirm` declines: `.cancelled`.
+/// 4. Snapshot the Dock, re-read it (re-planning when it changed meanwhile).
+/// 5. `backend.apply`, then one `restarter.restart()`.
+/// 6. Any error from 5, or a cancellation seen after the backend finished: restore the snapshot,
+///    restart once, then throw `ApplyError.failedAndRolledBack` (or `.cancelled`). If the
+///    restore or the restart fails: `ApplyError.rollbackFailed` with the snapshot id.
+///
+/// Applies are serialized. A new `apply` cancels the one in flight and runs after it has settled.
+/// Cancellation is checked between steps. Before the backend runs it yields `.cancelled` with no
+/// writes; once the backend has run the rollback always completes first (it is shielded from the
+/// cancellation). After a successful restart the apply is complete and is reported as applied.
+///
+/// Not covered here (v0.2): quitting/launching apps and writing Dock preferences.
+public actor ProfileApplier {
+    public typealias AppPathResolver = @Sendable (AppRef) -> String?
+    typealias Planner = @Sendable (DockState, DockState) -> DockPlan
+
+    /// The installed app for the bundle identifier, else `AppRef.path` when it exists on disk.
+    public static let defaultPathResolver: AppPathResolver = { app in
+        if !app.bundleId.isEmpty,
+           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId)
+        {
+            return url.path(percentEncoded: false)
+        }
+        if let path = app.path, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
+            return path
+        }
+        return nil
+    }
+
+    private struct InFlight {
+        let id: UUID
+        let task: Task<ApplyResult, any Error>
+    }
+
+    private let backend: any DockBackend
+    private let snapshots: SnapshotStore
+    private let restarter: any DockRestarting
+    private let resolvePath: AppPathResolver
+    private let planner: Planner
+    private var inFlight: InFlight?
+
+    public init(
+        backend: any DockBackend,
+        snapshots: SnapshotStore,
+        restarter: any DockRestarting,
+        resolvePath: @escaping AppPathResolver = ProfileApplier.defaultPathResolver
+    ) {
+        self.init(
+            backend: backend,
+            snapshots: snapshots,
+            restarter: restarter,
+            resolvePath: resolvePath,
+            planner: DiffEngine.plan(from:to:)
+        )
+    }
+
+    /// Lets tests substitute the planner, e.g. to produce an unsatisfiable plan (which a valid
+    /// profile cannot).
+    init(
+        backend: any DockBackend,
+        snapshots: SnapshotStore,
+        restarter: any DockRestarting,
+        resolvePath: @escaping AppPathResolver,
+        planner: @escaping Planner
+    ) {
+        self.backend = backend
+        self.snapshots = snapshots
+        self.restarter = restarter
+        self.resolvePath = resolvePath
+        self.planner = planner
+    }
+
+    // MARK: Preview
+
+    /// Validates the profile and computes what applying it would do. Writes nothing and takes no
+    /// snapshot. An unsatisfiable plan is returned (see `ApplyPreview.plan.issues`), not thrown.
+    public func preview(_ profile: Profile) async throws -> ApplyPreview {
+        try validate(profile)
+        let resolved = resolve(profile)
+        let current = try await backend.read()
+        return makePreview(profile: profile, resolved: resolved, current: current)
+    }
+
+    // MARK: Apply
+
+    public func apply(
+        _ profile: Profile,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)? = nil
+    ) async throws -> ApplyResult {
+        let previous = inFlight
+        previous?.task.cancel()
+
+        let id = UUID()
+        let task = Task<ApplyResult, any Error> {
+            // Wait for the cancelled predecessor to settle (including its rollback).
+            _ = await previous?.task.result
+            return try await self.run(profile, confirm: confirm)
+        }
+        inFlight = InFlight(id: id, task: task)
+
+        let result = await withTaskCancellationHandler {
+            await task.result
+        } onCancel: {
+            task.cancel()
+        }
+        if inFlight?.id == id { inFlight = nil }
+        return try result.get()
+    }
+
+    private func run(
+        _ profile: Profile,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult {
+        if Task.isCancelled { return .cancelled(rolledBack: false) }
+
+        // Everything up to and including the snapshot is read-only for the Dock.
+        let preview: ApplyPreview
+        let snapshot: Snapshot
+        let plan: DockPlan
+        let skipped: [SkippedItem]
+        do {
+            try validate(profile)
+            let resolved = resolve(profile)
+            let first = makePreview(profile: profile, resolved: resolved, current: try await backend.read())
+
+            if first.plan.unsatisfiable { throw ApplyError.unsatisfiable(issues: first.plan.issues) }
+            if first.plan.isEmpty { return .noChanges(first) }
+            if Task.isCancelled { return .cancelled(rolledBack: false) }
+
+            if let confirm {
+                let accepted = await confirm(first)
+                if !accepted || Task.isCancelled { return .cancelled(rolledBack: false) }
+            }
+
+            snapshot = try await snapshots.save(
+                reason: "Before applying profile \(profile.name)",
+                profileName: profile.name
+            )
+            if Task.isCancelled { return .cancelled(rolledBack: false) }
+
+            // The Dock may have changed while the user was confirming.
+            let now = try await backend.read()
+            preview = now == first.current
+                ? first
+                : makePreview(profile: profile, resolved: resolved, current: now)
+            if preview.plan.unsatisfiable { throw ApplyError.unsatisfiable(issues: preview.plan.issues) }
+            if preview.plan.isEmpty { return .noChanges(preview) }
+            if Task.isCancelled { return .cancelled(rolledBack: false) }
+
+            plan = preview.plan
+            skipped = preview.skipped
+        } catch is CancellationError {
+            return .cancelled(rolledBack: false)
+        }
+
+        // Point of no return: from here every exit leaves the Dock restored or fully applied.
+        var failure: (any Error)?
+        do {
+            try await backend.apply(plan.operations)
+            if !Task.isCancelled {
+                try await restarter.restart()
+            }
+        } catch {
+            failure = error
+        }
+
+        if failure == nil && !Task.isCancelled {
+            return .applied(ApplyReport(
+                plan: plan,
+                snapshotID: snapshot.id,
+                skipped: skipped,
+                clearsRecentApps: preview.clearsRecentApps,
+                restarted: true
+            ))
+        }
+
+        let original = failure ?? CancellationError()
+        if let rollbackError = await rollBack(to: snapshot) {
+            throw ApplyError.rollbackFailed(original: original, rollback: rollbackError, snapshotID: snapshot.id)
+        }
+        if original is CancellationError {
+            return .cancelled(rolledBack: true)
+        }
+        throw ApplyError.failedAndRolledBack(original: original)
+    }
+
+    // MARK: Rollback
+
+    /// Restores the snapshot, then restarts the Dock once. Returns the error if either failed;
+    /// the restart is skipped when the restore failed (a restart would load the half-written
+    /// preferences). Runs detached so the cancellation that may have triggered the rollback
+    /// cannot cut it short.
+    private func rollBack(to snapshot: Snapshot) async -> (any Error)? {
+        let snapshots = snapshots
+        let restarter = restarter
+        let id = snapshot.id
+        return await Task.detached {
+            do {
+                try await snapshots.restore(id: id, createSafetySnapshot: false)
+                try await restarter.restart()
+                return nil
+            } catch {
+                return error
+            }
+        }.value
+    }
+
+    // MARK: Planning
+
+    private func validate(_ profile: Profile) throws {
+        do {
+            try profile.validate()
+        } catch {
+            throw ApplyError.invalidProfile(error)
+        }
+    }
+
+    private struct Resolved {
+        var target: DockState
+        var skipped: [SkippedItem]
+    }
+
+    /// The profile's layout with app paths resolved; apps that cannot be found are dropped.
+    private func resolve(_ profile: Profile) -> Resolved {
+        var target = DockState()
+        var skipped: [SkippedItem] = []
+        for section in DockSection.allCases {
+            for (index, item) in profile.items(in: section).enumerated() {
+                guard case .app(var app) = item else {
+                    target[section].append(item)
+                    continue
+                }
+                guard let path = resolvePath(app) else {
+                    skipped.append(SkippedItem(section: section, index: index, app: app))
+                    continue
+                }
+                app.path = path
+                target[section].append(.app(app))
+            }
+        }
+        return Resolved(target: target, skipped: skipped)
+    }
+
+    private func makePreview(profile: Profile, resolved: Resolved, current: DockState) -> ApplyPreview {
+        let target = Self.canonicalized(resolved.target, against: current)
+        return ApplyPreview(
+            profileName: profile.name,
+            current: current,
+            target: target,
+            plan: planner(current, target),
+            skipped: resolved.skipped
+        )
+    }
+
+    /// Replaces target tiles by the equivalent tile already in the Dock. The Dock cannot store
+    /// profile-only fields (`launchOnSwitch`, `brewCask`, an app `name`, ...), and the diff
+    /// compares tiles field by field, so without this every app would look changed on every apply.
+    /// "Equivalent" is `DockItem.matchesAfterWrite`, the rule the backend verifies writes with, so
+    /// substituting cannot change what a write is verified against.
+    static func canonicalized(_ target: DockState, against current: DockState) -> DockState {
+        var result = target
+        for section in DockSection.allCases {
+            let wanted = target[section]
+            let existing = current[section]
+            var used = [Bool](repeating: false, count: existing.count)
+            var matched = [Bool](repeating: false, count: wanted.count)
+
+            // Exact matches claim their tile first so a loose match cannot steal it.
+            for (i, item) in wanted.enumerated() {
+                if let j = existing.indices.first(where: { !used[$0] && existing[$0] == item }) {
+                    used[j] = true
+                    matched[i] = true
+                }
+            }
+            for (i, item) in wanted.enumerated() where !matched[i] {
+                if let j = existing.indices.first(where: { !used[$0] && item.matchesAfterWrite(existing[$0]) }) {
+                    used[j] = true
+                    result[section][i] = existing[j]
+                }
+            }
+        }
+        return result
+    }
+}
