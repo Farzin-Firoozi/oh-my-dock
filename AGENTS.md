@@ -2,6 +2,12 @@
 
 Applies to every agent and model working in this repo (Claude, Cursor, Antigravity, and others).
 
+## Setup
+
+- After cloning, run `make hooks` to enable `.githooks`: `commit-msg` rejects `Co-Authored-By` trailers, and `pre-push` runs `make test`.
+- `make dockutil` builds the bundled dockutil helper.
+- `make test` runs the test suite; `make build` builds the app.
+
 ## Commits
 
 - **Never add `Co-Authored-By` trailers** (or any agent/AI attribution) to commit messages or PR descriptions.
