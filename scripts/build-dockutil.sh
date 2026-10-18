@@ -37,24 +37,73 @@ TARGET_BIN="${TARGET_DIR}/dockutil"
 VERSION_FILE="${TARGET_DIR}/dockutil.version"
 THIRD_PARTY_DIR="${REPO_ROOT}/ThirdParty/dockutil"
 
-EXPECTED_VERSION_CONTENT="${DOCKUTIL_VERSION} ${DOCKUTIL_COMMIT}"
-EXPECTED_VERSION_CONTENT+=" ${CODESIGN_IDENTITY}"
-if [[ "${HOST_ONLY}" == true ]]; then
-  EXPECTED_VERSION_CONTENT+=" host-only"
-fi
-
 has_runtime_signature() {
   local binary="$1"
   codesign --verify --strict "${binary}" >/dev/null 2>&1 &&
     codesign -d --verbose=4 "${binary}" 2>&1 | grep -E 'flags=.*runtime' >/dev/null
 }
 
-# Short-circuit only when the full build configuration and hardened signature match.
+binary_sha256() {
+  shasum -a 256 "$1" | awk '{print $1}'
+}
+
+has_expected_architectures() {
+  local binary="$1"
+  local host_only="$2"
+  if [[ "${host_only}" == true ]]; then
+    return 0
+  fi
+  local archs
+  archs="$(lipo -archs "${binary}")"
+  [[ " ${archs} " == *" arm64 "* && " ${archs} " == *" x86_64 "* ]]
+}
+
+stamp_host_only_flag() {
+  local stamp_line="$1"
+  [[ "${stamp_line}" == *" host-only" ]]
+}
+
+stamp_line_without_host_only_suffix() {
+  local stamp_line="$1"
+  if [[ "${stamp_line}" == *" host-only" ]]; then
+    printf '%s' "${stamp_line% host-only}"
+  else
+    printf '%s' "${stamp_line}"
+  fi
+}
+
+installed_binary_matches_stamp() {
+  local stamp_line="$1"
+  local stamp_host_only=false
+  local core stamp_ver stamp_commit stamp_identity stamp_sha installed_sha
+
+  if stamp_host_only_flag "${stamp_line}"; then
+    stamp_host_only=true
+  fi
+  if [[ "${stamp_host_only}" != "${HOST_ONLY}" ]]; then
+    return 1
+  fi
+
+  core="$(stamp_line_without_host_only_suffix "${stamp_line}")"
+  read -r stamp_ver stamp_commit stamp_identity stamp_sha <<< "${core}"
+  if [[ "${stamp_ver}" != "${DOCKUTIL_VERSION}" ||
+    "${stamp_commit}" != "${DOCKUTIL_COMMIT}" ||
+    "${stamp_identity}" != "${CODESIGN_IDENTITY}" ||
+    -z "${stamp_sha}" ]]; then
+    return 1
+  fi
+
+  installed_sha="$(binary_sha256 "${TARGET_BIN}")"
+  [[ "${installed_sha}" == "${stamp_sha}" ]] &&
+    has_runtime_signature "${TARGET_BIN}" &&
+    has_expected_architectures "${TARGET_BIN}" "${HOST_ONLY}"
+}
+
+# Short-circuit only when stamp, SHA-256, architectures, and hardened signature match.
 if [[ "${FORCE}" == false && -f "${TARGET_BIN}" && -f "${VERSION_FILE}" ]]; then
-  CURRENT_VERSION_CONTENT="$(cat "${VERSION_FILE}" 2>/dev/null || true)"
-  if [[ "${CURRENT_VERSION_CONTENT}" == "${EXPECTED_VERSION_CONTENT}" ]] &&
-    has_runtime_signature "${TARGET_BIN}"; then
-    echo "dockutil is already built and up to date at ${TARGET_BIN} (${EXPECTED_VERSION_CONTENT})."
+  CURRENT_STAMP="$(tr -d '\n' < "${VERSION_FILE}" 2>/dev/null || true)"
+  if installed_binary_matches_stamp "${CURRENT_STAMP}"; then
+    echo "dockutil is already built and up to date at ${TARGET_BIN} (${CURRENT_STAMP})."
     echo "Use --force to rebuild."
     exit 0
   fi
@@ -159,11 +208,19 @@ if ! has_runtime_signature "${INSTALL_TMP}"; then
   exit 1
 fi
 
+chmod 0755 "${INSTALL_TMP}"
 mv -f "${INSTALL_TMP}" "${TARGET_BIN}"
 INSTALL_TMP=""
 
+INSTALLED_SHA="$(binary_sha256 "${TARGET_BIN}")"
+STAMP_CONTENT="${DOCKUTIL_VERSION} ${DOCKUTIL_COMMIT} ${CODESIGN_IDENTITY} ${INSTALLED_SHA}"
+if [[ "${HOST_ONLY}" == true ]]; then
+  STAMP_CONTENT+=" host-only"
+fi
+
 STAMP_TMP="$(mktemp "${TARGET_DIR}/.dockutil.version.XXXXXX")"
-printf '%s\n' "${EXPECTED_VERSION_CONTENT}" > "${STAMP_TMP}"
+printf '%s\n' "${STAMP_CONTENT}" > "${STAMP_TMP}"
+chmod 0644 "${STAMP_TMP}"
 mv -f "${STAMP_TMP}" "${VERSION_FILE}"
 STAMP_TMP=""
 
