@@ -14,12 +14,12 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 
 ## Process rules
 
-- **Cross-family review.** The reviewer is always from a **different model family** than the author: Claude-written code is reviewed by Sol, and Cursor/Antigravity-written code is reviewed by Opus. A writer never approves its own work.
+- **No Claude reviewers.** Reviews and verification never use Claude models. Primary reviewer is **Sol** (GPT-5.6); when Sol wrote the task, **Grok** is primary. A writer never approves its own work.
 - **Extra review lanes.** Every phase review (X.R) also gets an independent second opinion from **Grok** (all tasks) and a fast checklist pass from **Composer** (scripts, config, docs). Neither reviews tasks written by its own model; Composer skips Composer-authored tasks.
 - **Research and debugging lane.** Grok takes open-ended research, spike follow-ups, and second-pass root-cause analysis when a fix stalls (different family from the author).
 - **Fix-up lane.** Composer applies low-risk, mechanical review fixes (docs, scripts, config, renames); anything touching safety paths goes back to the original author tier.
-- **Code authoring.** All code tasks are written by Sonnet (or the Cursor/Antigravity model listed), never Opus. Opus is used for architecture design and reviews only. Bold rows mark safety-critical code that gets the strictest review.
-- **Verification** pass per phase: Sonnet runs the build, tests, and acceptance checks.
+- **Code authoring.** All code tasks are written by Sonnet (or the Cursor/Antigravity model listed), never Opus. Opus is used for architecture design only. Bold rows mark safety-critical code that gets the strictest review.
+- **Verification** pass per phase: **Terra** (GPT-5.6) runs the build, tests, and acceptance checks.
 - **Safety gate.** No agent touches the **live Dock** or quits real apps except in tasks marked 🔴, which need user confirmation first.
 - **Parallel groups.** Tasks in the same group (A, B…) run at the same time, in **separate worktrees** when they touch overlapping files. Groups run in order.
 - **Phase exit:** all tasks done, `swift test` + `xcodebuild build` green, review findings fixed, verifier passed.
@@ -36,7 +36,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 0.5 | Spike: `dockutil --list` format for apps/URLs/folders/spacers (read-only) | Flash-H | B |
 | 0.6 | 🔴 Spike: `NSRunningApplication.terminate()` permission. Test only on a TextEdit instance the spike launched | Sonnet | B |
 | 0.7 | Write spike findings into `technical-notes.md` | Haiku | C |
-| 0.R | Review: Opus (0.2–0.5), Sol (0.1, 0.6) · Verify: Sonnet | Opus + Sol + Grok + Composer | D |
+| 0.R | Review: Opus (0.2–0.5), Sol (0.1, 0.6) · Verify: Sonnet | Opus + Sol + Grok + Composer (done before the no-Claude rule) | D |
 
 **Exit:** app runs in the menu bar, `make test` + `make build` green locally, bundled dockutil runs from the app bundle, spike answers documented.
 
@@ -53,7 +53,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 1.7 | **`SnapshotStore`**: backup before apply, keep last N, restore | **Sol** | C |
 | 1.8 | **`ProfileApplier` actor**: snapshot → diff → execute → restart, rollback, cancel in-flight | **Sonnet** | D |
 | 1.9 | First-launch Default profile capture | Flash-H | D |
-| 1.R | Review: Sol (1.1, 1.5, 1.6, 1.8), Opus (1.2–1.4, 1.7, 1.9). Focus: rollback + concurrency · Verify: Sonnet | Opus + Sol + Grok + Composer | E |
+| 1.R | Review: Sol (all except 1.7), Grok (all except 1.4; primary for 1.7). Focus: rollback + concurrency · Verify: Terra | Sol + Grok + Composer | E |
 
 **Exit:** `swift test` covers models, diff, store, snapshot, and applier (fake backend); integration tests pass on a temp plist.
 
@@ -68,7 +68,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 2.5 | History window: snapshots + restore | Terra | B |
 | 2.6 | Global hotkeys (KeyboardShortcuts) + launch at login (`SMAppService`) | Composer | B |
 | 2.7 | 🔴 Manual QA on the live Dock with the user: save → 2 profiles → switch → undo | Sonnet | C |
-| 2.R | Review: Sol (2.1, 2.2), Opus (2.3–2.6) · Verify: Sonnet | Opus + Sol + Grok + Composer | D |
+| 2.R | Review: Sol (all), Grok (second opinion) · Verify: Terra | Sol + Grok + Composer | D |
 
 ## Phase 3: Release pipeline (parallel with Phase 2)
 
@@ -80,7 +80,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 3.4 | README (install, usage) | Haiku | B |
 | 3.5 | 🔴 **Release gate:** test quit/launch (`terminate()`, `openApplication`) on macOS 14, 15, and current with the notarized Developer ID build on a clean TCC state (spike 0.6 only covered macOS 27, ad-hoc) | Sonnet | C |
 | 3.6 | **Release gate:** verify the dockutil license/NOTICE ships in `Contents/Resources`; verify helper signature (Developer ID, `--timestamp`, hardened runtime) with `codesign --verify --deep --strict` | Flash-M | C |
-| 3.R | Security review of the signing/update path: Opus + Sol · Verify: Sonnet | Opus + Sol + Grok + Composer | D |
+| 3.R | Security review of the signing/update path: Sol + Grok · Verify: Terra | Sol + Grok + Composer | D |
 
 **Release gates (mandatory, block any release):** 3.5 and 3.6 pass. No release ships quit/launch without 3.5.
 
@@ -95,7 +95,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 4.5 | `DockutilScriptExporter` + JSON import/export with strict schema validation | Grok | A |
 | 4.2 | Prefs panel: live preview, revert, reset, per-profile | Sonnet | B |
 | 4.4 | Confirmation sheet (no permission flow needed in the tested scope — spike 0.6; release gate 3.5 still applies) | Flash-H | B |
-| 4.R | Review: Sol (4.2, 4.3; focus data loss), Opus (4.1, 4.4, 4.5) · Verify: Sonnet | Opus + Sol + Grok + Composer | C |
+| 4.R | Review: Sol (all; focus data loss in 4.3), Grok (all except 4.5; second opinion) · Verify: Terra | Sol + Grok + Composer | C |
 
 ## Phase 5: v0.3 (M3)
 
@@ -108,7 +108,7 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 5.5 | URL scheme `ohmydock://` | Flash-L | B |
 | 5.6 | `ohmydock` CLI (swift-argument-parser) + app handoff | Composer | B |
 | 5.7 | Cask `binary` stanza for the CLI | Flash-L | C |
-| 5.R | Review: Opus (5.1, 5.2, 5.4–5.7), Sol (5.3) · Verify: Sonnet | Opus + Sol + Grok + Composer | D |
+| 5.R | Review: Grok (5.1, 5.3–5.7), Sol (all except 5.1) · Verify: Terra | Sol + Grok + Composer | D |
 
 ## Phase 6: v0.4+ (M4)
 
@@ -123,12 +123,12 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 6.6 | **Gallery import safety**: schema hardening + rules from profile-gallery.md | **Sonnet** | B |
 | 6.7 | Gallery repo: CI validation, `index.json` on Pages | Composer | B |
 | 6.8 | Gallery tab UI + `ohmydock://import` | Sonnet | C |
-| 6.R | Security review (gallery = untrusted input): Opus + Sol · Verify: Sonnet | Opus + Sol + Grok + Composer | D |
+| 6.R | Security review (gallery = untrusted input): Sol + Grok · Verify: Terra | Sol + Grok + Composer | D |
 
 ## Model mix
 
 | Provider | Models | Build tasks | Role |
 |---|---|---|---|
-| Claude | Opus · Sonnet · Haiku | 1 (6.3 design only) · 17 · 2 | Safety-critical engine, SwiftUI, QA, verifier, reviewer of non-Claude code |
+| Claude | Opus · Sonnet · Haiku | 1 (6.3 design only) · 17 · 2 | Safety-critical engine, SwiftUI, QA (no review or verification role) |
 | Cursor | Sol · Terra · Composer · Grok | 2 · 4 · 9 · 4 | Second high-tier author, standard features, reviewer of Claude code. Grok: parsing/validation/trigger logic, research, debugging, second-opinion reviewer. Composer: scaffolding, integrations, CLI, fix-up lane, checklist reviewer |
 | Antigravity | Flash-H · Flash-M · Flash-L | 7 · 3 · 2 | Low and standard tasks, protocols, small features, scripts |
