@@ -1,4 +1,4 @@
-.PHONY: generate test build dockutil
+.PHONY: generate test build dockutil hooks
 
 generate:
 	xcodegen generate
@@ -11,3 +11,6 @@ build: generate
 
 dockutil:
 	./scripts/build-dockutil.sh
+
+hooks:
+	git config core.hooksPath .githooks

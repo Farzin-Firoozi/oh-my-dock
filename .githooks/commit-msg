@@ -1,0 +1,6 @@
+#!/bin/sh
+# Reject commit messages that contain Co-Authored-By trailers.
+if grep -qi '^co-authored-by:' "$1"; then
+  echo "commit-msg: Co-Authored-By trailers are not allowed in this project." >&2
+  exit 1
+fi
