@@ -485,6 +485,31 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(presenter.dismissCount == 1)
     }
 
+    @Test func timeoutDismissesThePendingPresentationAndReleasesTheGate() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let gate = DockOperationGate()
+        let model = MenuBarViewModel(
+            library: FakeLibrary([work]), dock: FakeDockBackend(), applier: Self.askingApplier,
+            undoer: FakeUndoer(), gate: gate, confirmationPresenter: presenter,
+            confirmationTimeout: .milliseconds(30)
+        )
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { presenter.presented.count == 1 })
+        #expect(gate.isBusy)
+
+        // Nobody answers: the timeout alone must take the alert down and free the gate.
+        #expect(await eventually { !gate.isBusy })
+        #expect(presenter.dismissCount == 1)
+
+        // A late click on the dismissed alert is ignored.
+        presenter.userAnswers(true)
+        #expect(model.banner?.message.hasPrefix("Timed out waiting for confirmation") == true)
+        let ran = await gate.run("next") { true }
+        #expect(ran)
+    }
+
     @Test func aLateAnswerFromAnOldAlertCannotResolveANewerQuestion() async {
         let model = makeModel(applier: Self.askingApplier)
         model.apply(profile("Work"))
