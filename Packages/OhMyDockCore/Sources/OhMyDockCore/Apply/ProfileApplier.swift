@@ -126,6 +126,10 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 ///    restart once, then throw `ApplyError.failedAndRolledBack` (or `.cancelled`). If the
 ///    restore or the restart fails: `ApplyError.rollbackFailed` with the snapshot id.
 ///
+/// The `confirm` closure is raced against cancellation: a dialog that stays open (or ignores
+/// cancellation) cannot hold up the cancelled apply, so it cannot hold up the next one either. Its
+/// late answer is dropped.
+///
 /// Applies are serialized. A new `apply` cancels the one in flight and runs after it has settled.
 /// Cancellation is checked between steps. Before the backend runs it yields `.cancelled` with no
 /// writes; once the backend has run the rollback always completes first (it is shielded from the
@@ -249,7 +253,7 @@ public actor ProfileApplier {
             if Task.isCancelled { return .cancelled(rolledBack: false) }
 
             if let confirm {
-                let accepted = await confirm(first)
+                let accepted = await Self.confirmation(confirm, for: first)
                 if !accepted || Task.isCancelled { return .cancelled(rolledBack: false) }
             }
 
@@ -301,6 +305,30 @@ public actor ProfileApplier {
             return .cancelled(rolledBack: true)
         }
         throw ApplyError.failedAndRolledBack(original: original)
+    }
+
+    // MARK: Confirmation
+
+    /// The answer of `confirm`, or false as soon as the surrounding task is cancelled, whether or
+    /// not `confirm` ever returns. `confirm` runs in its own task, which is cancelled on a cancel
+    /// and whose answer is ignored once this has returned.
+    private static func confirmation(
+        _ confirm: @escaping @Sendable (ApplyPreview) async -> Bool,
+        for preview: ApplyPreview
+    ) async -> Bool {
+        let race = ConfirmationRace()
+        return await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+                race.start(continuation) {
+                    Task {
+                        let answer = await confirm(preview)
+                        race.resolve(answer)
+                    }
+                }
+            }
+        } onCancel: {
+            race.resolve(false)
+        }
     }
 
     // MARK: Rollback
@@ -409,5 +437,42 @@ public actor ProfileApplier {
             }
         }
         return result
+    }
+}
+
+/// Resolves exactly once, with the first of "the user answered" and "the apply was cancelled".
+private final class ConfirmationRace: @unchecked Sendable {
+    private let lock = NSLock()
+    private var continuation: CheckedContinuation<Bool, Never>?
+    private var task: Task<Void, Never>?
+    private var answer: Bool?
+
+    /// Hands over the continuation and starts the confirmation, unless it was resolved already.
+    func start(_ continuation: CheckedContinuation<Bool, Never>, _ makeTask: () -> Task<Void, Never>) {
+        lock.lock()
+        if let answer {
+            lock.unlock()
+            continuation.resume(returning: answer)
+            return
+        }
+        self.continuation = continuation
+        task = makeTask()
+        lock.unlock()
+    }
+
+    func resolve(_ value: Bool) {
+        lock.lock()
+        guard answer == nil else {
+            lock.unlock()
+            return
+        }
+        answer = value
+        let continuation = continuation
+        let task = task
+        self.continuation = nil
+        self.task = nil
+        lock.unlock()
+        continuation?.resume(returning: value)
+        task?.cancel()
     }
 }

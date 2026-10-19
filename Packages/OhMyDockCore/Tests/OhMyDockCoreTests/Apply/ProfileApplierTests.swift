@@ -441,6 +441,63 @@ struct ProfileApplierTests {
         #expect(await asked.value == 0)
     }
 
+    @Test func confirmationThatIgnoresCancellationDoesNotBlockTheNextApply() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let applier = env.applier()
+        let dialogOpen = Gate()
+        let userNeverAnswers = Gate()
+        let targetB = DockState(apps: [notes])
+
+        // A dialog that is left open and does not react to cancellation.
+        let first = Task {
+            try await applier.apply(profile("A", apps: [calculator])) { _ in
+                await dialogOpen.open()
+                await userNeverAnswers.wait()
+                return true
+            }
+        }
+        await dialogOpen.wait()
+        let second = Task { try await applier.apply(profile("B", apps: targetB.apps)) }
+
+        #expect(try await first.value == .cancelled(rolledBack: false))
+        guard case .applied = try await second.value else {
+            Issue.record("Expected the second apply to be applied")
+            return
+        }
+        #expect(await env.backend.state == targetB)
+        #expect(await env.backend.appliedBatches.count == 1)
+
+        // The abandoned dialog answering later changes nothing.
+        await userNeverAnswers.open()
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(await env.backend.appliedBatches.count == 1)
+        #expect(await env.snapshots.count == 1)
+    }
+
+    @Test func cancellingTheCallerReturnsWhileTheDialogIsStillOpen() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let applier = env.applier()
+        let dialogOpen = Gate()
+        let userNeverAnswers = Gate()
+
+        let task = Task {
+            try await applier.apply(profile(apps: [calculator])) { _ in
+                await dialogOpen.open()
+                await userNeverAnswers.wait()
+                return true
+            }
+        }
+        await dialogOpen.wait()
+        task.cancel()
+
+        #expect(try await task.value == .cancelled(rolledBack: false))
+        #expect(await env.backend.appliedBatches.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+        await userNeverAnswers.open()
+    }
+
     // MARK: Skipped apps
 
     @Test func unresolvedAppsAreSkippedAndReported() async throws {
