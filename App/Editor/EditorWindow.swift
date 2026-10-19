@@ -26,6 +26,7 @@ struct EditorWindow: View {
     @State private var tab: Tab = .layout
     @State private var departure: Departure?
     private let quit: PreviewQuitCoordinator
+    @AppStorage(MockupSettingsStore.plainStripKey) private var plainStrip = false
 
     /// The store is the app-wide `ProfileStore`, so editor edits and other writers see the same files.
     /// `gate` is the app-wide Dock operation gate; previews run through it.
@@ -107,6 +108,12 @@ struct EditorWindow: View {
                     .pickerStyle(.segmented)
                 }
                 if tab == .layout {
+                    ToolbarItem(placement: .primaryAction) {
+                        Toggle(isOn: $plainStrip) {
+                            Label("Plain Strip", systemImage: "rectangle.split.3x1")
+                        }
+                        .help("Show the Dock as a flat strip instead of inside a MacBook")
+                    }
                     ToolbarItem(placement: .primaryAction) {
                         Button {
                             withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {

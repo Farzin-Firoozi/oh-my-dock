@@ -9,34 +9,31 @@ struct DropTarget: Equatable {
     var slot: Int
 }
 
-/// The Dock strip: apps | divider | others, with drag-to-reorder and Finder drops.
+/// The Dock canvas: the profile's Dock inside a MacBook mockup, or as a flat strip.
 struct DockCanvas: View {
     @Bindable var model: EditorViewModel
     let profile: Profile
-    @State private var dragged: EditorItemID?
-    @State private var target: DropTarget?
+    @AppStorage(MockupSettingsStore.plainStripKey) private var plainStrip = false
     @State private var addSheet: AddItemSheet?
 
     var body: some View {
         VStack(spacing: 18) {
-            Spacer(minLength: 0)
-            ScrollView(.horizontal) {
-                HStack(alignment: .center, spacing: 0) {
-                    strip(.apps)
-                    Divider()
-                        .frame(height: DockTileMetrics.iconSize + 20)
-                        .padding(.horizontal, 10)
-                    strip(.others)
+            if plainStrip {
+                Spacer(minLength: 0)
+                ScrollView(.horizontal) {
+                    DockTilesView(model: model, profile: profile, style: .labeled, axis: .horizontal)
+                        .padding(DockTileStyle.labeled.barPadding)
                 }
-                .padding(14)
+                .scrollBounceBehavior(.basedOnSize)
+                .fixedSize(horizontal: false, vertical: true)
+                .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
+                .overlay {
+                    RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.separator)
+                }
+                .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
+            } else {
+                MacBookMockupView(model: model, profile: profile)
             }
-            .scrollBounceBehavior(.basedOnSize)
-            .fixedSize(horizontal: false, vertical: true)
-            .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
-            .overlay {
-                RoundedRectangle(cornerRadius: 22, style: .continuous).strokeBorder(.separator)
-            }
-            .shadow(color: .black.opacity(0.12), radius: 14, y: 6)
             Label("Drag tiles to reorder. Drop apps, folders or files from Finder to add them.", systemImage: "hand.draw")
                 .font(.callout)
                 .foregroundStyle(.secondary)
@@ -53,7 +50,7 @@ struct DockCanvas: View {
                 .menuStyle(.borderlessButton)
                 .fixedSize()
             }
-            Spacer(minLength: 0)
+            if plainStrip { Spacer(minLength: 0) }
         }
         .padding(24)
         .frame(maxWidth: .infinity, maxHeight: .infinity)
@@ -67,17 +64,54 @@ struct DockCanvas: View {
         }
         .addItemSheets(model: model, sheet: $addSheet)
     }
+}
+
+/// Apps | divider | others, with drag-to-reorder and Finder drops. Shared by the flat strip and
+/// the MacBook mockup; `style` and `axis` pick the look.
+struct DockTilesView: View {
+    @Bindable var model: EditorViewModel
+    let profile: Profile
+    var style: DockTileStyle
+    var axis: Axis
+    @State private var dragged: EditorItemID?
+    @State private var target: DropTarget?
+
+    private var stack: AnyLayout {
+        axis == .horizontal ? AnyLayout(HStackLayout(spacing: 0)) : AnyLayout(VStackLayout(spacing: 0))
+    }
+
+    var body: some View {
+        stack {
+            strip(.apps)
+            divider
+            strip(.others)
+        }
+    }
+
+    private var divider: some View {
+        Rectangle()
+            .fill(.separator)
+            .frame(
+                width: axis == .horizontal ? 1 : style.dividerLength,
+                height: axis == .horizontal ? style.dividerLength : 1
+            )
+            .padding(axis == .horizontal ? .horizontal : .vertical, (style.dividerExtent - 1) / 2)
+            .accessibilityHidden(true)
+    }
 
     private func strip(_ section: DockSection) -> some View {
         let ids = model.itemIDs(in: section)
         let items = profile.items(in: section)
-        return HStack(spacing: 4) {
+        let rowLayout = axis == .horizontal ? AnyLayout(HStackLayout(spacing: style.spacing)) : AnyLayout(VStackLayout(spacing: style.spacing))
+        return rowLayout {
             ForEach(Array(zip(ids, items).enumerated()), id: \.element.0) { index, pair in
                 let (id, item) = pair
                 DockTileView(
                     item: item,
                     isSelected: model.selectedItemID == id,
-                    showsInsertionBar: target == DropTarget(section: section, slot: index)
+                    showsInsertionBar: target == DropTarget(section: section, slot: index),
+                    style: style,
+                    axis: axis
                 )
                 .opacity(dragged == id ? 0.35 : 1)
                 .onTapGesture { model.selectedItemID = id }
@@ -85,7 +119,7 @@ struct DockCanvas: View {
                     dragged = id
                     return NSItemProvider(object: "oh-my-dock-tile" as NSString)
                 }
-                .onDrop(of: [.fileURL, .plainText], delegate: dropDelegate(section: section, slot: index, width: DockTileView.width(for: item)))
+                .onDrop(of: [.fileURL, .plainText], delegate: dropDelegate(section: section, slot: index, extent: style.extent(for: item)))
                 .contextMenu {
                     Button("Remove", systemImage: "trash", role: .destructive) {
                         withAnimation(reorderSpring) { model.removeItem(id) }
@@ -99,24 +133,42 @@ struct DockCanvas: View {
     }
 
     private func trailingZone(_ section: DockSection, count: Int) -> some View {
-        ZStack {
+        let extent = style.trailingExtent(isEmpty: count == 0)
+        return ZStack {
             if count == 0 {
-                Text(section == .apps ? "Drop apps here" : "Drop folders or files here")
-                    .font(.callout)
-                    .foregroundStyle(.tertiary)
-                    .multilineTextAlignment(.center)
+                emptyHint(section)
             }
         }
-        .frame(width: count == 0 ? 150 : 30, height: DockTileMetrics.iconSize + 28)
+        .frame(
+            width: axis == .horizontal ? extent : style.crossThickness,
+            height: axis == .horizontal ? style.crossThickness : extent
+        )
         .contentShape(Rectangle())
-        .overlay(alignment: .leading) {
-            if target == DropTarget(section: section, slot: count) { InsertionBar() }
+        .overlay(alignment: axis == .horizontal ? .leading : .top) {
+            if target == DropTarget(section: section, slot: count) { InsertionBar(axis: axis) }
         }
-        .onDrop(of: [.fileURL, .plainText], delegate: dropDelegate(section: section, slot: count, width: nil))
+        .onDrop(of: [.fileURL, .plainText], delegate: dropDelegate(section: section, slot: count, extent: nil))
     }
 
-    private func dropDelegate(section: DockSection, slot: Int, width: CGFloat?) -> StripDropDelegate {
-        StripDropDelegate(model: model, section: section, slot: slot, width: width, dragged: $dragged, target: $target)
+    @ViewBuilder
+    private func emptyHint(_ section: DockSection) -> some View {
+        let text = section == .apps ? "Drop apps here" : "Drop folders or files here"
+        if style == .labeled {
+            Text(text)
+                .font(.callout)
+                .foregroundStyle(.tertiary)
+                .multilineTextAlignment(.center)
+        } else {
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .strokeBorder(.secondary.opacity(0.5), style: StrokeStyle(lineWidth: 1, dash: [3, 3]))
+                .overlay { Image(systemName: "plus").font(.caption).foregroundStyle(.secondary) }
+                .padding(4)
+                .accessibilityLabel(text)
+        }
+    }
+
+    private func dropDelegate(section: DockSection, slot: Int, extent: CGFloat?) -> StripDropDelegate {
+        StripDropDelegate(model: model, section: section, slot: slot, extent: extent, axis: axis, dragged: $dragged, target: $target)
     }
 }
 
@@ -126,8 +178,9 @@ struct StripDropDelegate: DropDelegate {
     let model: EditorViewModel
     let section: DockSection
     let slot: Int
-    /// Nil for the end-of-section zone.
-    let width: CGFloat?
+    /// Length of the tile along `axis`. Nil for the end-of-section zone.
+    let extent: CGFloat?
+    let axis: Axis
     @Binding var dragged: EditorItemID?
     @Binding var target: DropTarget?
 
@@ -174,7 +227,8 @@ struct StripDropDelegate: DropDelegate {
     }
 
     private func resolvedSlot(_ info: DropInfo) -> Int {
-        guard let width else { return slot }
-        return info.location.x > width / 2 ? slot + 1 : slot
+        guard let extent else { return slot }
+        let position = axis == .horizontal ? info.location.x : info.location.y
+        return position > extent / 2 ? slot + 1 : slot
     }
 }

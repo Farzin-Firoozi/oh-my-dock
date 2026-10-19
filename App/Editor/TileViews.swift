@@ -13,11 +13,16 @@ struct DockTileView: View {
     let item: DockItem
     let isSelected: Bool
     let showsInsertionBar: Bool
+    var style: DockTileStyle = .labeled
+    var axis: Axis = .horizontal
 
     var body: some View {
         content
-            .frame(width: Self.width(for: item))
-            .padding(.vertical, 6)
+            .frame(
+                width: axis == .horizontal ? style.extent(for: item) : nil,
+                height: axis == .vertical ? style.extent(for: item) : nil
+            )
+            .padding(axis == .horizontal ? .vertical : .horizontal, style.crossPadding)
             .background {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .fill(isSelected ? AnyShapeStyle(Color.accentColor.opacity(0.22)) : AnyShapeStyle(.clear))
@@ -26,25 +31,39 @@ struct DockTileView: View {
                 RoundedRectangle(cornerRadius: 10, style: .continuous)
                     .strokeBorder(isSelected ? Color.accentColor : .clear, lineWidth: 1.5)
             }
-            .overlay(alignment: .leading) {
-                if showsInsertionBar { InsertionBar().offset(x: -4) }
+            .overlay(alignment: axis == .horizontal ? .leading : .top) {
+                if showsInsertionBar { InsertionBar(axis: axis).offset(x: axis == .horizontal ? -4 : 0, y: axis == .vertical ? -4 : 0) }
             }
             .contentShape(Rectangle())
+            .accessibilityElement(children: .ignore)
+            .accessibilityLabel(accessibilityTitle)
+            .accessibilityAddTraits(isSelected ? [.isButton, .isSelected] : .isButton)
     }
 
     static func width(for item: DockItem) -> CGFloat {
-        switch item {
-        case .spacer(.small): 26
-        case .spacer(.normal): 44
-        case .spacer(.flex): 64
-        default: DockTileMetrics.tileWidth
-        }
+        DockTileStyle.labeled.extent(for: item)
     }
 
     @ViewBuilder
     private var content: some View {
-        switch item {
-        case .spacer(let kind):
+        switch (item, style) {
+        case (.spacer(let kind), .compact):
+            RoundedRectangle(cornerRadius: 8, style: .continuous)
+                .strokeBorder(.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
+                .overlay {
+                    if kind == .flex {
+                        Image(systemName: axis == .horizontal ? "arrow.left.and.right" : "arrow.up.and.down")
+                            .font(.caption2).foregroundStyle(.secondary)
+                    }
+                }
+                .padding(2)
+                .frame(
+                    width: axis == .horizontal ? nil : DockTileMetrics.iconSize,
+                    height: axis == .horizontal ? DockTileMetrics.iconSize : nil
+                )
+        case (_, .compact):
+            TileIcon(item: item).frame(width: DockTileMetrics.iconSize, height: DockTileMetrics.iconSize)
+        case (.spacer(let kind), .labeled):
             VStack(spacing: 4) {
                 RoundedRectangle(cornerRadius: 8, style: .continuous)
                     .strokeBorder(.secondary.opacity(0.6), style: StrokeStyle(lineWidth: 1.2, dash: [4, 3]))
@@ -62,6 +81,11 @@ struct DockTileView: View {
                 Text(title).font(.caption2).lineLimit(1).truncationMode(.tail)
             }
         }
+    }
+
+    private var accessibilityTitle: String {
+        if case .spacer(let kind) = item { return "\(spacerTitle(kind)) spacer" }
+        return title
     }
 
     private func spacerTitle(_ kind: SpacerKind) -> String {
@@ -85,10 +109,15 @@ struct DockTileView: View {
 }
 
 struct InsertionBar: View {
+    var axis: Axis = .horizontal
+
     var body: some View {
         Capsule()
             .fill(Color.accentColor)
-            .frame(width: 3, height: DockTileMetrics.iconSize + 8)
+            .frame(
+                width: axis == .horizontal ? 3 : DockTileMetrics.iconSize + 8,
+                height: axis == .horizontal ? DockTileMetrics.iconSize + 8 : 3
+            )
             .transition(.opacity)
     }
 }
