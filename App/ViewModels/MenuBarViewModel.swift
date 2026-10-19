@@ -76,6 +76,7 @@ final class MenuBarViewModel {
     @ObservationIgnored private var lastAppliedID: UUID? {
         didSet { activeRecord.save(lastAppliedID) }
     }
+    @ObservationIgnored private var refreshGeneration = 0
     @ObservationIgnored private var operation: Task<Void, Never>?
     @ObservationIgnored private var pendingConfirmation: CheckedContinuation<Bool, Never>?
 
@@ -113,10 +114,18 @@ final class MenuBarViewModel {
     }
 
     /// Reloads everything the popover shows. Never writes.
+    ///
+    /// Latest call wins: `start()` and the popover's `.task` both refresh, and a refresh that began
+    /// earlier but finishes later must not overwrite the newer one's result.
     func refresh() async {
-        profiles = await library.profiles()
-        undoTarget = await undoer.undoTarget()
+        refreshGeneration += 1
+        let generation = refreshGeneration
+        let loadedProfiles = await library.profiles()
+        let target = await undoer.undoTarget()
         let current = try? await dock.read()
+        guard generation == refreshGeneration else { return }
+        profiles = loadedProfiles
+        undoTarget = target
         activeProfileID = current.flatMap(activeProfile(in:))?.id
     }
 

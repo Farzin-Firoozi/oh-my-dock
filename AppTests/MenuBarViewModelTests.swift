@@ -70,6 +70,38 @@ private actor FakeUndoer: DockUndoing {
     func fail(with error: any Error) { failure = error }
 }
 
+/// A library whose first `profiles()` call waits until `releaseFirst()` and then returns the
+/// stale (empty) list; later calls return `fresh` immediately.
+private actor SlowFirstLibrary: ProfileLibrary {
+    private let fresh: [Profile]
+    private(set) var calls = 0
+    private var firstCall: CheckedContinuation<Void, Never>?
+    private var released = false
+
+    init(fresh: [Profile]) { self.fresh = fresh }
+
+    func profiles() async -> [Profile] {
+        calls += 1
+        guard calls == 1 else { return fresh }
+        if !released { await withCheckedContinuation { firstCall = $0 } }
+        return []
+    }
+
+    func releaseFirst() {
+        released = true
+        firstCall?.resume()
+        firstCall = nil
+    }
+
+    func save(_ profile: Profile) throws {}
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
+        throw ProfileStoreError.profileNotFound(id)
+    }
+    func setHotkey(id: UUID, to hotkey: Hotkey?) throws -> Profile {
+        throw ProfileStoreError.profileNotFound(id)
+    }
+}
+
 // MARK: - Helpers
 
 private func app(_ id: String, _ name: String) -> DockItem {
@@ -237,6 +269,26 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
         record.save(nil)
         #expect(record.load() == nil)
+    }
+
+    @Test func anOlderRefreshCannotOverwriteANewerOne() async {
+        let work = profile("Work", apps: [safari])
+        let library = SlowFirstLibrary(fresh: [work])
+        let model = MenuBarViewModel(
+            library: library, dock: FakeDockBackend(state: DockState(apps: [safari])),
+            applier: noApply, undoer: FakeUndoer()
+        )
+
+        let older = Task { await model.refresh() }
+        while await library.calls < 1 { await Task.yield() }
+
+        await model.refresh() // the newer refresh finishes first
+        #expect(model.profiles == [work])
+
+        await library.releaseFirst()
+        await older.value
+        #expect(model.profiles == [work])
+        #expect(model.activeProfileID == work.id)
     }
 
     @Test func lastAppliedProfileWinsWhenSeveralMatch() async {
