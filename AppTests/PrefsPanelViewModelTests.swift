@@ -231,6 +231,32 @@ private struct Rig {
         #expect(rig.gate.isPreviewActive)
     }
 
+    @Test func quitRevertsTheActivePreviewThroughTheGate() async {
+        let rig = Rig(prefs: .displayDefaults)
+        let coordinator = PreviewQuitCoordinator()
+        coordinator.register(rig.panel)
+        #expect(await coordinator.revertForQuit() == .nothingToRevert)
+
+        await rig.panel.preview()
+        #expect(coordinator.hasActivePreview)
+        #expect(await coordinator.revertForQuit() == .reverted)
+        #expect(await rig.previewer.revertCalls == 1)
+        #expect(await rig.previewer.live == DockPrefs(tileSize: 70, autohide: true))
+        #expect(!rig.panel.isPreviewing)
+        #expect(!rig.gate.isPreviewActive)
+        #expect(!rig.gate.isBusy)
+    }
+
+    @Test func quitReportsAFailedRevertAndKeepsThePreview() async {
+        let rig = Rig(prefs: .displayDefaults)
+        let coordinator = PreviewQuitCoordinator()
+        coordinator.register(rig.panel)
+        await rig.panel.preview()
+        await rig.previewer.configure(failRevert: true)
+        #expect(await coordinator.revertForQuit() == .failed)
+        #expect(rig.panel.isPreviewing)
+    }
+
     @Test func previewWhenDockAlreadyMatchesStartsNothing() async {
         let live = DockPrefs.displayDefaults
         let rig = Rig(prefs: live, live: live)

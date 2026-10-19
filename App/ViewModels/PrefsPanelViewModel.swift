@@ -58,7 +58,7 @@ extension DockPrefs {
 /// through `DockOperationGate` with a revert path. Nothing here knows about views.
 @MainActor
 @Observable
-final class PrefsPanelViewModel {
+final class PrefsPanelViewModel: PreviewReverting {
     struct Message: Equatable {
         enum Kind: Equatable { case info, success, error }
         var kind: Kind

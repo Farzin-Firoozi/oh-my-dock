@@ -16,6 +16,8 @@ enum AppEnvironment {
         let gate: DockOperationGate
         /// Previews Dock preferences from the editor; always called through `gate`.
         let prefsPreviewer: any DockPrefsPreviewing
+        /// Reverts an active preview before the app quits; the editor's panel registers with it.
+        let previewQuit: PreviewQuitCoordinator
     }
 
     /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
@@ -77,7 +79,8 @@ enum AppEnvironment {
             opener: WorkspaceReleasePageOpener()
         )
         return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, updates: updates, profiles: profiles, gate: gate,
-                     prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter))
+                     prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter),
+                     previewQuit: PreviewQuitCoordinator())
     }
 
     private static func makeLiveBackend() -> any DockBackend {

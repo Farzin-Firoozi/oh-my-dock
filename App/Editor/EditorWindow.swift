@@ -25,10 +25,12 @@ struct EditorWindow: View {
     @State private var showsInspector = true
     @State private var tab: Tab = .layout
     @State private var departure: Departure?
+    private let quit: PreviewQuitCoordinator
 
     /// The store is the app-wide `ProfileStore`, so editor edits and other writers see the same files.
     /// `gate` is the app-wide Dock operation gate; previews run through it.
-    init(store: any EditorProfileStore, previewer: any DockPrefsPreviewing, gate: DockOperationGate) {
+    init(store: any EditorProfileStore, previewer: any DockPrefsPreviewing, gate: DockOperationGate, quit: PreviewQuitCoordinator) {
+        self.quit = quit
         let editor = EditorViewModel(store: store)
         _model = State(initialValue: editor)
         _panel = State(initialValue: PrefsPanelViewModel(
@@ -68,6 +70,7 @@ struct EditorWindow: View {
             Text("Your Dock currently shows previewed preferences. Revert them, or keep what's on the Dock now?")
         }
         .task {
+            quit.register(panel)
             await model.load()
             NSApp.activate()
         }

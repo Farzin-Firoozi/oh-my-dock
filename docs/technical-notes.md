@@ -54,6 +54,8 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 - **Preview guard.** While a Dock preferences preview is on the Dock (`DockOperationGate.isPreviewActive`, set by the prefs panel), menu-bar and hotkey apply, undo, and history restore/delete are refused with “Revert or keep the Dock preferences preview first.” They check on entry and again inside the gate (`requireNoPreview()`), because a preview can begin while an operation waits for its turn. A failed revert keeps the flag set.
 
+- **Quit with a preview.** `AppDelegate.applicationShouldTerminate` returns `.terminateLater` when a preview is active and asks `PreviewQuitCoordinator.revertForQuit()` to revert it through the gate, waiting at most 10 s. If the revert fails or times out, an alert offers “Quit Anyway” (restore “Before previewing Dock preferences” from History) or Cancel.
+
 ### DockPrefsWriter (M2)
 
 - **`DockPrefsDomainIO`**: read/write/remove a single key + `synchronize()`. Live: `CFPreferencesDockPrefsDomainIO` (`com.apple.dock`). Tests: `InMemoryDockPrefsDomainIO` only; any live CFPreferences test uses a throwaway domain, never `com.apple.dock`.
