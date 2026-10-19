@@ -39,7 +39,13 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 - **Apply flow** (`ProfileApplier`, in place now): snapshot, then re-read the Dock. Refuse if it no longer matches the state the plan was built from (`dockChanged`; indices would be stale). Backend apply (`--no-restart`, re-read verifies). One Dock restart. Re-read after restart. Any failure, or a re-read mismatch: restore the snapshot, restart once, report. If the restore also fails: `rollbackFailed` with the snapshot id.
 - **Restore is a true replace.** `defaults import com.apple.dock <file>` replaces the whole domain. The restored plist is then read back and must equal the snapshot, else `restoreVerificationFailed`.
-- **Not in the flow yet:** `DockPrefsWriter` and `AppSwitcher` (M2). Until then apply touches tiles only.
+- **Not wired yet:** `DockPrefsWriter` and `AppSwitcher` are implemented but not called from `ProfileApplier` (integration is a separate task). Until then apply touches tiles only.
+
+### DockPrefsWriter (M2)
+
+- **`DockPrefsDomainIO`**: read/write/remove a single key + `synchronize()`. Live: `CFPreferencesDockPrefsDomainIO` (`com.apple.dock`). Tests: `InMemoryDockPrefsDomainIO` only; any live CFPreferences test uses a throwaway domain, never `com.apple.dock`.
+- **`DockPrefsWriter`**: `captureAsDockPrefs()` / `captureCurrent()` for “save current”; `diff(current:target:)` → `PrefsDiff` for the diff preview; `apply(_:expecting:)` validates ranges, refuses when the domain changed since `expecting` (`DockPrefsWriterError.prefsChanged`, same idea as `DockBackendError.dockChanged`), writes only non-`nil` `DockPrefs` fields, verifies every write by re-reading, returns `changedKeys`, `needsDockRestart` (true when any key changed — caller runs one `killall Dock` with tile apply), and `rollbackImage` for `rollback(_:)`.
+- **Planned apply order** (see implementation-plan): tile `DockBackend.apply` → `DockPrefsWriter.apply` → single `DockRestarter.restart()`.
 
 ## Native Dock limits
 
