@@ -7,15 +7,26 @@ import OhMyDockCore
 @MainActor
 @Observable
 final class HistoryViewModel {
-    enum PendingAction: Equatable {
+    enum PendingAction: Equatable, Identifiable {
         case restore(Snapshot)
         case delete(Snapshot)
+
+        /// Kind plus snapshot id, so restoring and deleting the same snapshot are different alerts.
+        var id: String {
+            switch self {
+            case let .restore(snapshot): "restore-\(snapshot.id.uuidString)"
+            case let .delete(snapshot): "delete-\(snapshot.id.uuidString)"
+            }
+        }
     }
 
     private(set) var snapshots: [Snapshot] = []
     private(set) var isBusy = false
     var pendingAction: PendingAction?
     var errorMessage: String?
+
+    /// True while toolbar actions must stay disabled: an operation runs or an alert is up.
+    var isInteractionLocked: Bool { isBusy || pendingAction != nil || errorMessage != nil }
 
     @ObservationIgnored private let history: any SnapshotHistoryManaging
 
@@ -43,14 +54,31 @@ final class HistoryViewModel {
         pendingAction = nil
     }
 
-    func confirmPendingAction() {
-        guard pendingAction != nil, !isBusy else { return }
-        Task { await performPendingAction() }
+    /// Confirms the action the user was asked about. The alert passes the value it was showing
+    /// (captured at click time) because SwiftUI clears `pendingAction` when it dismisses the alert,
+    /// which can happen before the button's closure runs.
+    @discardableResult
+    func confirm(_ action: PendingAction) -> Task<Void, Never>? {
+        guard !isBusy else { return nil }
+        pendingAction = nil
+        return Task { await perform(action) }
+    }
+
+    /// Confirms whatever is currently pending. Prefer `confirm(_:)` from views.
+    @discardableResult
+    func confirmPendingAction() -> Task<Void, Never>? {
+        guard let action = pendingAction else { return nil }
+        return confirm(action)
     }
 
     func performPendingAction() async {
-        guard let action = pendingAction, !isBusy else { return }
+        guard let action = pendingAction else { return }
         pendingAction = nil
+        await perform(action)
+    }
+
+    func perform(_ action: PendingAction) async {
+        guard !isBusy else { return }
         isBusy = true
         errorMessage = nil
         defer { isBusy = false }

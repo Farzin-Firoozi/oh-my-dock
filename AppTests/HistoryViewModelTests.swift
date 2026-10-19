@@ -138,4 +138,52 @@ private func snapshot(pinned: Bool = false) -> Snapshot {
         #expect(model.errorMessage == "history boom")
         #expect(model.isBusy == false)
     }
+
+    @Test func confirmingAfterTheAlertClearedPendingActionStillPerformsTheCapturedAction() async {
+        let item = snapshot()
+        let history = FakeHistory([item])
+        let model = HistoryViewModel(history: history)
+        await model.load()
+
+        model.requestRestore(item)
+        let captured = try! #require(model.pendingAction)
+        // SwiftUI clears the alert's item before it runs the button closure.
+        model.pendingAction = nil
+        await model.confirm(captured)?.value
+
+        #expect(await history.restored == [item.id])
+        #expect(model.errorMessage == nil)
+    }
+
+    @Test func confirmPendingActionPerformsThroughTheRealConfirmPath() async {
+        let item = snapshot()
+        let history = FakeHistory([item])
+        let model = HistoryViewModel(history: history)
+        await model.load()
+
+        model.requestDelete(item)
+        await model.confirmPendingAction()?.value
+
+        #expect(await history.deleted == [item.id])
+        #expect(model.pendingAction == nil)
+        #expect(model.snapshots.isEmpty)
+    }
+
+    @Test func pendingActionIdentityIncludesKindAndSnapshot() {
+        let item = snapshot()
+        #expect(HistoryViewModel.PendingAction.restore(item).id != HistoryViewModel.PendingAction.delete(item).id)
+        #expect(HistoryViewModel.PendingAction.restore(item).id != HistoryViewModel.PendingAction.restore(snapshot()).id)
+    }
+
+    @Test func interactionIsLockedWhileAnAlertIsUp() {
+        let item = snapshot()
+        let model = HistoryViewModel(history: FakeHistory([item]))
+        #expect(model.isInteractionLocked == false)
+        model.requestRestore(item)
+        #expect(model.isInteractionLocked)
+        model.cancelPendingAction()
+        #expect(model.isInteractionLocked == false)
+        model.errorMessage = "x"
+        #expect(model.isInteractionLocked)
+    }
 }

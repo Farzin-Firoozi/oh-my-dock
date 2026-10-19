@@ -45,7 +45,7 @@ struct HistoryWindow: View {
                 Button("Restore", systemImage: "arrow.counterclockwise") {
                     selectedSnapshot.map(model.requestRestore)
                 }
-                .disabled(selectedSnapshot == nil || model.isBusy)
+                .disabled(selectedSnapshot == nil || model.isInteractionLocked)
 
                 Button(
                     selectedSnapshot?.pinned == true ? "Unpin" : "Pin",
@@ -53,12 +53,12 @@ struct HistoryWindow: View {
                 ) {
                     selectedSnapshot.map(model.togglePin)
                 }
-                .disabled(selectedSnapshot == nil || model.isBusy)
+                .disabled(selectedSnapshot == nil || model.isInteractionLocked)
 
                 Button("Delete", systemImage: "trash", role: .destructive) {
                     selectedSnapshot.map(model.requestDelete)
                 }
-                .disabled(selectedSnapshot == nil || model.isBusy)
+                .disabled(selectedSnapshot == nil || model.isInteractionLocked)
             }
         }
         .task { await model.load() }
@@ -68,14 +68,14 @@ struct HistoryWindow: View {
                 Alert(
                     title: Text("Restore this snapshot?"),
                     message: Text("Your current Dock will be replaced with the snapshot from \(snapshot.createdAt.formatted(date: .abbreviated, time: .shortened))."),
-                    primaryButton: .default(Text("Restore")) { model.confirmPendingAction() },
+                    primaryButton: .default(Text("Restore")) { model.confirm(action) },
                     secondaryButton: .cancel { model.cancelPendingAction() }
                 )
             case let .delete(snapshot):
                 Alert(
                     title: Text("Delete this snapshot?"),
                     message: Text("The snapshot from \(snapshot.createdAt.formatted(date: .abbreviated, time: .shortened)) will be permanently deleted."),
-                    primaryButton: .destructive(Text("Delete")) { model.confirmPendingAction() },
+                    primaryButton: .destructive(Text("Delete")) { model.confirm(action) },
                     secondaryButton: .cancel { model.cancelPendingAction() }
                 )
             }
@@ -96,14 +96,5 @@ struct HistoryWindow: View {
             get: { model.errorMessage != nil },
             set: { if !$0 { model.errorMessage = nil } }
         )
-    }
-}
-
-extension HistoryViewModel.PendingAction: Identifiable {
-    var id: UUID {
-        switch self {
-        case let .restore(snapshot), let .delete(snapshot):
-            snapshot.id
-        }
     }
 }
