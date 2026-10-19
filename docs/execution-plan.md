@@ -67,8 +67,8 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 | 2.4 | Diff preview sheet | Flash-H | B |
 | 2.5 | History window: snapshots + restore | Terra | B |
 | 2.6 | Global hotkeys (KeyboardShortcuts) + launch at login (`SMAppService`) | Composer | B |
-| 2.7 | 🔴 Manual QA on the live Dock with the user: save → 2 profiles → switch → undo | Sonnet | C |
-| 2.R | Review: Sol (all), Grok (second opinion) · Verify: Terra | Sol + Grok + Composer | D |
+| 2.7 ✅ | 🔴 Manual QA on the live Dock with the user: save → 2 profiles → switch → undo (passed) | Sonnet | C |
+| 2.R | Review: Sol (all), Grok (second opinion) · Verify: Terra. Two Grok rounds + Composer verification done; the last fix round (77199e1, 90fd93e) was not re-reviewed, by decision | Sol + Grok + Composer | D |
 
 ## Phase 3: Release pipeline (parallel with Phase 2)
 
