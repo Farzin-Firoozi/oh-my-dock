@@ -188,6 +188,40 @@ final class EditorViewModel {
         return insert(item, in: section, at: drop?.section == section ? drop?.slot : nil)
     }
 
+    /// Adds an application from a bundle URL (picker or Spotlight list).
+    @discardableResult
+    func addApplication(at url: URL, at slot: Int? = nil) -> EditorItemID? {
+        guard let ref = ApplicationReference.appRef(at: url) else { return nil }
+        return insert(.app(ref), in: .apps, at: slot)
+    }
+
+    /// Adds a link tile after validating the address (`https` only).
+    @discardableResult
+    func addURLString(_ raw: String, label: String? = nil, at slot: Int? = nil) -> EditorItemID? {
+        switch EditorURLInput.normalizedURL(from: raw) {
+        case .success(let url):
+            let trimmed = label?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            let item = URLItem(url: url, label: trimmed.isEmpty ? nil : trimmed)
+            return insert(.url(item), in: .others, at: slot)
+        case .failure(.empty):
+            error = .validation(.unsupportedURLScheme(.others, index: 0, url: ""))
+            return nil
+        case .failure(.invalid):
+            error = .validation(.unsupportedURLScheme(.others, index: 0, url: raw.trimmingCharacters(in: .whitespacesAndNewlines)))
+            return nil
+        }
+    }
+
+    @discardableResult
+    func addFolder(_ folder: FolderItem, at slot: Int? = nil) -> EditorItemID? {
+        insert(.folder(folder), in: .others, at: slot)
+    }
+
+    @discardableResult
+    func addFile(_ file: FileItem, at slot: Int? = nil) -> EditorItemID? {
+        insert(.file(file), in: .others, at: slot)
+    }
+
     @discardableResult
     func addSpacer(_ kind: SpacerKind = .normal, in section: DockSection, at slot: Int? = nil) -> EditorItemID? {
         insert(.spacer(kind), in: section, at: slot)
@@ -340,13 +374,7 @@ final class EditorViewModel {
     static func tile(forFileURL url: URL) -> (DockSection, DockItem) {
         let url = url.standardizedFileURL
         let values = try? url.resourceValues(forKeys: [.isDirectoryKey, .isPackageKey])
-        if url.pathExtension.lowercased() == "app", values?.isDirectory == true {
-            let bundle = Bundle(url: url)
-            let info = bundle?.infoDictionary
-            let name = (info?["CFBundleDisplayName"] as? String)
-                ?? (info?["CFBundleName"] as? String)
-                ?? url.deletingPathExtension().lastPathComponent
-            let ref = AppRef(bundleId: bundle?.bundleIdentifier ?? "", name: name, path: url.path)
+        if let ref = ApplicationReference.appRef(at: url) {
             return (.apps, .app(ref))
         }
         if values?.isDirectory == true, values?.isPackage != true {

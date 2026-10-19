@@ -15,6 +15,7 @@ struct DockCanvas: View {
     let profile: Profile
     @State private var dragged: EditorItemID?
     @State private var target: DropTarget?
+    @State private var addSheet: AddItemSheet?
 
     var body: some View {
         VStack(spacing: 18) {
@@ -39,12 +40,15 @@ struct DockCanvas: View {
             Label("Drag tiles to reorder. Drop apps, folders or files from Finder to add them.", systemImage: "hand.draw")
                 .font(.callout)
                 .foregroundStyle(.secondary)
-            HStack {
+            HStack(spacing: 16) {
                 Menu {
-                    spacerMenu(.apps, title: "Add Spacer to Apps")
-                    spacerMenu(.others, title: "Add Spacer to Others")
+                    Button("Application…", systemImage: "app.badge") { addSheet = .application }
+                    Button("Web Link…", systemImage: "link") { addSheet = .url }
+                    Button("Folder or File…", systemImage: "folder") { addSheet = .folderOrFile }
+                    Divider()
+                    Button("Spacer…", systemImage: "rectangle.dashed") { addSheet = .spacer }
                 } label: {
-                    Label("Add Spacer", systemImage: "rectangle.dashed")
+                    Label("Add", systemImage: "plus")
                 }
                 .menuStyle(.borderlessButton)
                 .fixedSize()
@@ -61,19 +65,7 @@ struct DockCanvas: View {
                 withAnimation(reorderSpring) { model.removeItem(id) }
             }
         }
-    }
-
-    @ViewBuilder
-    private func spacerMenu(_ section: DockSection, title: String) -> some View {
-        Menu(title) {
-            Button("Spacer") { add(.normal, to: section) }
-            Button("Small Spacer") { add(.small, to: section) }
-            Button("Flex Spacer") { add(.flex, to: section) }
-        }
-    }
-
-    private func add(_ kind: SpacerKind, to section: DockSection) {
-        withAnimation(reorderSpring) { _ = model.addSpacer(kind, in: section) }
+        .addItemSheets(model: model, sheet: $addSheet)
     }
 
     private func strip(_ section: DockSection) -> some View {

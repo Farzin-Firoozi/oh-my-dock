@@ -205,6 +205,49 @@ private func makeModel(_ profiles: [Profile] = []) async -> (EditorViewModel, Fa
         #expect(model.selectedProfile?.apps.isEmpty == true)
     }
 
+    @Test func addURLStringRequiresHTTPS() async {
+        let (model, store) = await makeModel([Profile(name: "P")])
+        #expect(model.addURLString("https://example.com", label: "Site") != nil)
+        await model.flush()
+        guard case .url(let item)? = model.selectedProfile?.others.first else {
+            Issue.record("url missing"); return
+        }
+        #expect(item.url.absoluteString == "https://example.com")
+        #expect(item.label == "Site")
+        #expect(await store.saveCount == 1)
+
+        #expect(model.addURLString("http://example.com") == nil)
+        #expect(model.selectedProfile?.others.count == 1)
+        #expect(model.addURLString("example.org") != nil)
+        #expect(model.selectedProfile?.others.count == 2)
+    }
+
+    @Test func addFolderWithOptions() async {
+        let (model, store) = await makeModel([Profile(name: "P")])
+        let folder = FolderItem(path: "/Users/me/Downloads", view: .grid, display: .folder, sort: .kind, label: "DL")
+        #expect(model.addFolder(folder) != nil)
+        await model.flush()
+        #expect(model.selectedProfile?.others == [.folder(folder)])
+        #expect(await store.saveCount == 1)
+    }
+
+    @Test func addApplicationFromBundle() async throws {
+        let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omd-app-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: dir) }
+        let bundle = dir.appendingPathComponent("Pick.app/Contents")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let info: [String: Any] = ["CFBundleIdentifier": "com.test.pick", "CFBundleName": "Pick"]
+        try (info as NSDictionary).write(to: bundle.appendingPathComponent("Info.plist"))
+
+        let (model, _) = await makeModel([Profile(name: "P")])
+        let url = dir.appendingPathComponent("Pick.app")
+        #expect(model.addApplication(at: url) != nil)
+        guard case .app(let ref)? = model.selectedProfile?.apps.first else {
+            Issue.record("app missing"); return
+        }
+        #expect(ref.bundleId == "com.test.pick" && ref.name == "Pick")
+    }
+
     @Test func droppedFilesBecomeTiles() async throws {
         let dir = FileManager.default.temporaryDirectory.appendingPathComponent("omd-\(UUID().uuidString)")
         defer { try? FileManager.default.removeItem(at: dir) }
