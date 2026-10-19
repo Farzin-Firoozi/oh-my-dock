@@ -151,6 +151,8 @@ private struct ProfileImportSanitizer {
         var index: Int
         /// A label, name or similar string was shortened.
         var truncated: Bool
+        /// The shortened strings as they are now (the new label or name).
+        var shortened: Set<String> = []
         var dropped = false
     }
 
@@ -164,27 +166,48 @@ private struct ProfileImportSanitizer {
                 changes.append(.droppedItem(section, index: index, reason: .emptyLabel))
                 continue
             }
-            result.append(Candidate(item: clean, section: section, index: index, truncated: truncated))
+            result.append(Candidate(
+                item: clean,
+                section: section,
+                index: index,
+                truncated: truncated,
+                shortened: truncated ? Self.shortenedStrings(of: clean, from: item) : []
+            ))
         }
+        return result
+    }
+
+    /// The label or name `clean` now has, when it differs from `original`'s.
+    private static func shortenedStrings(of clean: DockItem, from original: DockItem) -> Set<String> {
+        var result: Set<String> = []
+        switch (clean, original) {
+        case let (.app(now), .app(was)) where now.name != was.name: result = [now.name]
+        case let (.url(now), .url(was)) where now.label != was.label: result = [now.label ?? ""]
+        case let (.folder(now), .folder(was)) where now.label != was.label: result = [now.label ?? ""]
+        case let (.file(now), .file(was)) where now.label != was.label: result = [now.label ?? ""]
+        default: break
+        }
+        result.remove("")
         return result
     }
 
     /// Drops tiles dockutil would refuse or could not address, judged the way
     /// `DockutilPlanner.wouldReject` does: the label a tile would get against the strings that
-    /// match the other tile. Both directions count, since the Dock may be built in any order. If a
-    /// shortened string is involved, any key in common counts, because a shortened string that
-    /// equals another tile's bundle id or path is exactly the collision to prevent.
+    /// match the other tile. Both directions count, since the Dock may be built in any order. A
+    /// string that was shortened also collides with any key of the other tile it now equals, since
+    /// a shortened string that equals another tile's bundle id or path is exactly the collision to
+    /// prevent. Keys the two tiles shared before (two URLs with one path) are not the shortening's
+    /// doing and do not count.
     private mutating func dropCollisions(_ candidates: inout [Candidate]) {
         let keys = candidates.map { DockutilPlanner.matchKeys(of: $0.item) }
         let labels = candidates.map { DockutilPlanner.computedLabel(of: $0.item) }
         for later in candidates.indices where !candidates[later].item.isSpacer {
             for earlier in candidates.indices where earlier < later && !candidates[earlier].item.isSpacer {
                 guard !candidates[later].dropped, !candidates[earlier].dropped else { continue }
-                let strict = candidates[later].truncated || candidates[earlier].truncated
-                let collides = strict
-                    ? !keys[later].isDisjoint(with: keys[earlier])
-                    : (!labels[later].isEmpty && keys[earlier].contains(labels[later]))
-                        || (!labels[earlier].isEmpty && keys[later].contains(labels[earlier]))
+                let collides = (!labels[later].isEmpty && keys[earlier].contains(labels[later]))
+                    || (!labels[earlier].isEmpty && keys[later].contains(labels[earlier]))
+                    || !candidates[later].shortened.isDisjoint(with: keys[earlier])
+                    || !candidates[earlier].shortened.isDisjoint(with: keys[later])
                 guard collides else { continue }
                 let victim = candidates[earlier].truncated && !candidates[later].truncated ? earlier : later
                 candidates[victim].dropped = true

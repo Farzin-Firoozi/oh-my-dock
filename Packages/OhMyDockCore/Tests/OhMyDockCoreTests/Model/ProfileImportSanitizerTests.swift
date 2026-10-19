@@ -501,6 +501,20 @@ import Testing
         #expect(result.profile.apps == [.spacer(.normal)])
     }
 
+    @Test func shorteningALabelDoesNotDropATileOverAKeyTheyAlreadyShared() throws {
+        let long = String(repeating: "L", count: Profile.maxImportTextLength + 10)
+        let profile = Profile(name: "P", others: [
+            .url(URLItem(url: URL(string: "https://a.example/shared")!, label: long)),
+            .url(URLItem(url: URL(string: "https://b.example/shared")!)),
+        ])
+
+        let result = try sanitize(profile)
+
+        #expect(result.profile.others.count == 2)
+        #expect(!result.changes.contains { if case .droppedItem = $0 { true } else { false } })
+        #expect(result.changes.contains(.truncatedString(field: "label")))
+    }
+
     @Test func emptyProfileIsStillSanitized() throws {
         let result = try sanitize(Profile(name: "P"))
         #expect(result.profile.apps.isEmpty && result.profile.others.isEmpty)
