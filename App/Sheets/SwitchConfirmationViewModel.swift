@@ -2,15 +2,19 @@ import AppKit
 import Foundation
 import Observation
 import OhMyDockCore
+import SwiftUI
 
 /// View model driving `SwitchConfirmationView`.
 ///
-/// Follows modern macOS HIG / Sequoia styling.
-/// Maps a `SwitchPlan` into displayable rows and manages per-app quit exclusions.
+/// Prepares row data for:
+/// - Will quit (apps from plan's `willQuit`, each checkable to exclude for this switch)
+/// - Will keep running (apps from plan's `willKeep` + unchecked apps from `willQuit`)
+/// - Will open (apps from plan's `willLaunch`)
+/// - Protected (never quit; collapsed disclosure group)
 @MainActor
 @Observable
 public final class SwitchConfirmationViewModel: Identifiable {
-    public struct AppItem: Identifiable, Equatable, Sendable {
+    public struct AppItem: Identifiable, Hashable, Sendable {
         public let id: String
         public let bundleId: String
         public let name: String
@@ -24,9 +28,19 @@ public final class SwitchConfirmationViewModel: Identifiable {
             self.path = path
             self.pid = pid
         }
+
+        public var icon: NSImage {
+            if let path, !path.isEmpty {
+                return NSWorkspace.shared.icon(forFile: path)
+            }
+            if !bundleId.isEmpty, let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                return NSWorkspace.shared.icon(forFile: appUrl.path)
+            }
+            return NSWorkspace.shared.icon(for: .applicationBundle)
+        }
     }
 
-    public struct ProtectedItem: Identifiable, Equatable, Sendable {
+    public struct ProtectedItem: Identifiable, Hashable, Sendable {
         public let id: String
         public let bundleId: String
         public let name: String
@@ -37,6 +51,13 @@ public final class SwitchConfirmationViewModel: Identifiable {
             self.bundleId = bundleId
             self.name = name
             self.reason = reason
+        }
+
+        public var icon: NSImage {
+            if !bundleId.isEmpty, let appUrl = NSWorkspace.shared.urlForApplication(withBundleIdentifier: bundleId) {
+                return NSWorkspace.shared.icon(forFile: appUrl.path)
+            }
+            return NSWorkspace.shared.icon(for: .applicationBundle)
         }
     }
 
@@ -65,9 +86,16 @@ public final class SwitchConfirmationViewModel: Identifiable {
         self.onConfirm = onConfirm
     }
 
+    public var hasAppChanges: Bool {
+        !willQuitApps.isEmpty || !willOpenApps.isEmpty
+    }
+
     public var willQuitApps: [AppItem] {
-        plan.willQuit.map { app in
+        plan.willQuit.compactMap { app in
             let bundleId = app.bundleId ?? ""
+            if !bundleId.isEmpty && excludedBundleIDs.contains(bundleId.lowercased()) {
+                return nil
+            }
             let name = app.name.isEmpty ? (app.bundleId ?? "Process \(app.processIdentifier)") : app.name
             return AppItem(
                 id: "quit-\(app.processIdentifier)-\(bundleId)",
