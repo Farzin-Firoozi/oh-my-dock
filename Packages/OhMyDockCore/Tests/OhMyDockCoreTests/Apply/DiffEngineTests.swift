@@ -178,6 +178,29 @@ import Testing
         #expect(plan.summary.contains("Changed: Downloads"))
     }
 
+    @Test func summaryPairsOnlyAsManyEditsAsThereAreInsertions() throws {
+        // Two equal stale tiles are replaced by one edited tile: one "Changed", one "Removed".
+        let oldFolder = folder("Downloads", view: .grid)
+        let newFolder = folder("Downloads", view: .list)
+        let plan = try assertCorrect(
+            DockState(others: [oldFolder, oldFolder]),
+            DockState(others: [newFolder])
+        )
+        #expect(plan.summary.contains("Changed: Downloads"))
+        #expect(plan.summary.contains("Removed: Downloads"))
+    }
+
+    @Test func movesOfDuplicateTilesAreStableAcrossManyShuffles() throws {
+        // Exercises the move bookkeeping with repeated items; must never trap.
+        let a = app("A"), b = app("B"), c = app("C")
+        let states = [[a, b, a, c, b], [c, a, b, b, a], [b, b, a, a, c], [a, a, a], [c, b, a]]
+        for from in states {
+            for to in states {
+                _ = try assertCorrect(DockState(apps: from), DockState(apps: to))
+            }
+        }
+    }
+
     @Test func changedLabelIsRemoveAndInsert() throws {
         let plan = try assertCorrect(
             DockState(others: [folder("Downloads", label: "Old")]),

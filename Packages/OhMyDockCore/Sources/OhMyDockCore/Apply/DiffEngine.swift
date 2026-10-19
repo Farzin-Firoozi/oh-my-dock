@@ -198,8 +198,17 @@ public enum DiffEngine {
         var working = (0..<n).filter { c in !removedIndices.contains(c) }
         let ordered = source.compactMap { $0 }
         for (position, c) in ordered.enumerated() where movable.contains(c) {
-            let from = working.firstIndex(of: c)!
-            let anchor = position == 0 ? -1 : working.firstIndex(of: ordered[position - 1])!
+            // Every tile of `ordered` survives (removals are not in `working` and never in
+            // `ordered`), so the lookups succeed; if that ever broke, skipping the move beats a crash.
+            guard let from = working.firstIndex(of: c) else { continue }
+            let anchor: Int
+            if position == 0 {
+                anchor = -1
+            } else if let predecessor = working.firstIndex(of: ordered[position - 1]) {
+                anchor = predecessor
+            } else {
+                continue
+            }
             let to = from < anchor ? anchor : anchor + 1
             guard from != to else { continue }
             working.remove(at: from)
@@ -279,9 +288,11 @@ public enum DiffEngine {
             var changed: [DockItem] = []
             // A removed and an inserted tile with the same identity are one edited tile.
             for item in diff.removed {
-                if let index = added.firstIndex(where: { $0.identity == item.identity }) {
-                    changed.append(added.remove(at: index))
-                    removed.remove(at: removed.firstIndex(of: item)!)
+                if let addedIndex = added.firstIndex(where: { $0.identity == item.identity }),
+                   let removedIndex = removed.firstIndex(of: item)
+                {
+                    changed.append(added.remove(at: addedIndex))
+                    removed.remove(at: removedIndex)
                 }
             }
             let entries: [(String, [DockItem])] = [
