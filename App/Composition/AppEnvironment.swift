@@ -22,6 +22,12 @@ enum AppEnvironment {
         )
     }
 
+    static func makeHistoryViewModel() -> HistoryViewModel {
+        let snapshots = SnapshotStore()
+        let history = SnapshotHistoryService(snapshots: snapshots, restarter: LiveDockRestarter())
+        return HistoryViewModel(history: history)
+    }
+
     private static func makeLiveBackend() -> any DockBackend {
         guard let dockutil = BundledTools.dockutilURL() else { return MissingDockutilBackend() }
         return DockutilBackend(dockutilURL: dockutil, target: .live)

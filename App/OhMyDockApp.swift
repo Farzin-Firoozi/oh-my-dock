@@ -21,5 +21,8 @@ struct OhMyDockApp: App {
 
         Window("Editor", id: "editor") { EditorWindow() }
         .defaultSize(width: 900, height: 600)
+
+        Window("History", id: "history") { HistoryWindow() }
+        .defaultSize(width: 700, height: 420)
     }
 }

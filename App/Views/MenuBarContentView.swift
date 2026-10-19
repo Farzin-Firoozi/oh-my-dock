@@ -89,6 +89,10 @@ struct MenuBarContentView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "editor")
             }
+            ActionRow("History…", systemImage: "clock.arrow.circlepath") {
+                NSApp.activate(ignoringOtherApps: true)
+                openWindow(id: "history")
+            }
         }
     }
 

@@ -36,6 +36,16 @@ protocol DockUndoing: Sendable {
     func undo(_ target: UndoTarget) async throws
 }
 
+/// Snapshot persistence and Dock restart operations needed by the history window.
+protocol SnapshotHistoryManaging: Sendable {
+    func list() async -> [Snapshot]
+    /// Restores a snapshot, then restarts the Dock so it reads the restored preferences.
+    func restore(id: UUID) async throws
+    func pin(id: UUID) async throws
+    func unpin(id: UUID) async throws
+    func delete(id: UUID) async throws
+}
+
 enum UndoError: Error, LocalizedError {
     /// The snapshot was restored but the Dock could not be restarted to load it.
     case restoredButRestartFailed(any Error)
@@ -73,5 +83,49 @@ struct SnapshotUndoService: DockUndoing {
         } catch {
             throw UndoError.restoredButRestartFailed(error)
         }
+    }
+}
+
+enum SnapshotHistoryError: Error, LocalizedError {
+    /// The snapshot was restored but the Dock could not be restarted to load it.
+    case restoredButRestartFailed(any Error)
+
+    var errorDescription: String? {
+        switch self {
+        case let .restoredButRestartFailed(error):
+            "The snapshot was restored but the Dock could not be restarted: \(error). "
+                + "Log out and back in, or restart the Dock, to see it."
+        }
+    }
+}
+
+/// Live history service backed by `SnapshotStore`.
+struct SnapshotHistoryService: SnapshotHistoryManaging {
+    let snapshots: SnapshotStore
+    let restarter: any DockRestarting
+
+    func list() async -> [Snapshot] {
+        await snapshots.list().snapshots
+    }
+
+    func restore(id: UUID) async throws {
+        try await snapshots.restore(id: id)
+        do {
+            try await restarter.restart()
+        } catch {
+            throw SnapshotHistoryError.restoredButRestartFailed(error)
+        }
+    }
+
+    func pin(id: UUID) async throws {
+        try await snapshots.pin(id: id)
+    }
+
+    func unpin(id: UUID) async throws {
+        try await snapshots.unpin(id: id)
+    }
+
+    func delete(id: UUID) async throws {
+        try await snapshots.delete(id: id)
     }
 }
