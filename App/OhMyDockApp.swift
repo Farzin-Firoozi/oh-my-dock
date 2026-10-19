@@ -3,21 +3,31 @@ import SwiftUI
 
 @main
 struct OhMyDockApp: App {
-    @State private var model: MenuBarViewModel
+    @State private var shell: AppEnvironment.Shell
 
     init() {
-        let model = AppEnvironment.makeMenuBarViewModel()
-        _model = State(initialValue: model)
+        let shell = AppEnvironment.makeShell()
+        _shell = State(initialValue: shell)
         // The popover's content is not built until it is first opened; capture the first-launch
         // profile and load the profile list now.
-        Task { await model.start() }
+        Task {
+            await shell.menuBar.start()
+            await shell.settings.load()
+        }
     }
 
     var body: some Scene {
         MenuBarExtra("oh-my-dock", systemImage: "dock.rectangle") {
-            MenuBarContentView(model: model)
+            MenuBarContentView(model: shell.menuBar)
+                .onChange(of: shell.menuBar.profiles) { _, profiles in
+                    shell.hotkeys.sync(profiles: profiles)
+                }
         }
         .menuBarExtraStyle(.window)
+
+        Settings {
+            SettingsView(model: shell.settings)
+        }
 
         Window("Editor", id: "editor") { EditorWindow() }
         .defaultSize(width: 900, height: 600)

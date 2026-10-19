@@ -93,6 +93,9 @@ struct MenuBarContentView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "history")
             }
+            SettingsLink {
+                ActionRow("Settings…", systemImage: "gear") {}
+            }
         }
     }
 

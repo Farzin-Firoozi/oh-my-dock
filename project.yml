@@ -20,6 +20,9 @@ settings:
 packages:
   OhMyDockCore:
     path: Packages/OhMyDockCore
+  KeyboardShortcuts:
+    url: https://github.com/sindresorhus/KeyboardShortcuts
+    from: 3.1.0
 
 targets:
   OhMyDock:
@@ -40,6 +43,8 @@ targets:
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
     info:
       path: App/Info.plist
       properties:
@@ -89,9 +94,12 @@ targets:
       - path: App/Services
       - path: App/ViewModels
       - path: App/Editor
+      - path: App/Settings
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore
+      - package: KeyboardShortcuts
+        product: KeyboardShortcuts
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES

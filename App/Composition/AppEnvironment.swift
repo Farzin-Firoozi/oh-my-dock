@@ -4,22 +4,39 @@ import OhMyDockCore
 /// The one place real services are constructed. Everything else takes protocols.
 @MainActor
 enum AppEnvironment {
-    /// The live view model: real profile and snapshot stores, the live Dock, `killall Dock`.
-    static func makeMenuBarViewModel() -> MenuBarViewModel {
+    struct Shell {
+        let menuBar: MenuBarViewModel
+        let hotkeys: HotkeyService
+        let settings: SettingsViewModel
+    }
+
+    static func makeShell() -> Shell {
         let profiles = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())
         let snapshots = SnapshotStore()
         let restarter = LiveDockRestarter()
         let backend = makeLiveBackend()
         let applier = ProfileApplier(backend: backend, snapshots: snapshots, restarter: restarter)
         let bootstrapper = FirstLaunchBootstrapper(profileStore: profiles, snapshotStore: snapshots)
-
-        return MenuBarViewModel(
+        let hotkeys = HotkeyService(registrar: KeyboardShortcutsRegistrar())
+        let menuBar = MenuBarViewModel(
             library: profiles,
             dock: backend,
             applier: applier,
             undoer: SnapshotUndoService(snapshots: snapshots, restarter: restarter),
             bootstrap: { _ = try await bootstrapper.runIfNeeded() }
         )
+        hotkeys.attach(menuBar: menuBar)
+        let settings = SettingsViewModel(
+            library: profiles,
+            launchAtLogin: LiveLaunchAtLoginService(),
+            hotkeys: hotkeys
+        )
+        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings)
+    }
+
+    /// The live view model: real profile and snapshot stores, the live Dock, `killall Dock`.
+    static func makeMenuBarViewModel() -> MenuBarViewModel {
+        makeShell().menuBar
     }
 
     static func makeHistoryViewModel() -> HistoryViewModel {
