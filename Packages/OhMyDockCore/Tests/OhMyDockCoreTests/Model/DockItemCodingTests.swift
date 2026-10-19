@@ -20,6 +20,25 @@ import Testing
         .unknown(UnknownTile(tileType: "mystery-tile")),
     ]
 
+    @Test func emptyLabelIsNilEverywhere() throws {
+        let url = URL(string: "https://example.com")!
+        #expect(URLItem(url: url, label: "") == URLItem(url: url))
+        #expect(FolderItem(path: "/a", label: "") == FolderItem(path: "/a"))
+        #expect(FileItem(path: "/a", label: "").label == nil)
+        #expect(UnknownTile(tileType: "t", label: "") == UnknownTile(tileType: "t"))
+
+        var mutated = FileItem(path: "/a", label: "Named")
+        mutated.label = ""
+        #expect(mutated.label == nil)
+
+        // And so does JSON: the same tile written either way decodes to the same item.
+        let empty = try ModelTestSupport.decode(DockItem.self, #"{"type":"file","path":"/a","label":""}"#)
+        let absent = try ModelTestSupport.decode(DockItem.self, #"{"type":"file","path":"/a"}"#)
+        #expect(empty == absent)
+        let emptyUnknown = try ModelTestSupport.decode(DockItem.self, #"{"type":"unknown","tileType":"t","label":""}"#)
+        #expect(emptyUnknown.identity == DockItem.unknown(UnknownTile(tileType: "t")).identity)
+    }
+
     @Test(arguments: allCases)
     func roundTrips(_ item: DockItem) throws {
         #expect(try ModelTestSupport.roundTrip(item) == item)

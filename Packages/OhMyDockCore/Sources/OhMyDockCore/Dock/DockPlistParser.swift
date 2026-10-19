@@ -102,7 +102,7 @@ public enum DockPlistParser {
         }
         let explicitBundleID = nonEmpty(DockPlistValues.string(data["bundle-identifier"]))
         let path = DockPlistValues.dictionary(data["file-data"]).flatMap(absoluteFilePath(in:))
-        let label = DockPlistValues.string(data["file-label"])
+        let label = nonEmpty(DockPlistValues.string(data["file-label"]))
         let isApp = explicitBundleID != nil || path?.lowercased().hasSuffix(".app") == true
 
         if isApp {
@@ -140,7 +140,7 @@ public enum DockPlistParser {
             view: view,
             display: display,
             sort: sort,
-            label: DockPlistValues.string(data["file-label"])
+            label: nonEmpty(DockPlistValues.string(data["file-label"]))
         ))
     }
 
@@ -154,7 +154,8 @@ public enum DockPlistParser {
         else {
             return unknown(from: tile, tileType: "url-tile")
         }
-        let label = DockPlistValues.string(data["label"]) ?? DockPlistValues.string(data["file-label"])
+        let label = nonEmpty(DockPlistValues.string(data["label"]))
+            ?? nonEmpty(DockPlistValues.string(data["file-label"]))
         return .url(URLItem(url: url, label: label))
     }
 
@@ -162,7 +163,7 @@ public enum DockPlistParser {
         let type = tileType ?? DockPlistValues.string(tile["tile-type"]) ?? ""
         let data = DockPlistValues.dictionary(tile["tile-data"])
         let label = data.flatMap {
-            DockPlistValues.string($0["file-label"]) ?? DockPlistValues.string($0["label"])
+            nonEmpty(DockPlistValues.string($0["file-label"])) ?? nonEmpty(DockPlistValues.string($0["label"]))
         }
         return .unknown(UnknownTile(tileType: type, label: label))
     }

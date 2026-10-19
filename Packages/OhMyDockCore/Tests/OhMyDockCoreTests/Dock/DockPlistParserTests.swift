@@ -240,6 +240,32 @@ import Testing
         #expect(item == .url(URLItem(url: URL(string: "https://example.com/docs/")!)))
     }
 
+    @Test func emptyLabelsParseAsNoLabel() {
+        let url = urlTile("https://example.com", label: "")
+        #expect(DockPlistParser.parseTile(url, section: .others, resolvingBundleIdentifier: noop)
+            == .url(URLItem(url: URL(string: "https://example.com")!)))
+
+        // An empty `label` does not hide the `file-label`.
+        let both: [String: Any] = [
+            "tile-type": "url-tile",
+            "tile-data": [
+                "label": "",
+                "file-label": "Docs",
+                "url": ["_CFURLString": "https://example.com/docs", "_CFURLStringType": 15],
+            ],
+        ]
+        #expect(DockPlistParser.parseTile(both, section: .others, resolvingBundleIdentifier: noop)
+            == .url(URLItem(url: URL(string: "https://example.com/docs")!, label: "Docs")))
+
+        let folder = directoryTile(path: "/Users/tester/Downloads", stringType: 0, label: "", showas: 0, displayas: 0, arrangement: 1)
+        #expect(DockPlistParser.parseTile(folder, section: .others, resolvingBundleIdentifier: noop)
+            == .folder(FolderItem(path: "/Users/tester/Downloads")))
+
+        let unknown: [String: Any] = ["tile-type": "mystery-tile", "tile-data": ["file-label": ""]]
+        #expect(DockPlistParser.parseTile(unknown, section: .others, resolvingBundleIdentifier: noop)
+            == .unknown(UnknownTile(tileType: "mystery-tile")))
+    }
+
     @Test func urlTileFallsBackToFileLabel() {
         let tile: [String: Any] = [
             "tile-type": "url-tile",

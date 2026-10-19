@@ -31,13 +31,25 @@ public enum DockSection: String, Codable, Hashable, Sendable, CaseIterable {
 
 // MARK: - Payloads
 
+/// Labels use one convention everywhere: nil means "no label, let dockutil derive one", and an
+/// empty string is the same thing, so it is stored as nil. Without this a tile read from the
+/// Dock with `""` and the same tile in a profile with nil would differ for the diff, the
+/// equality and the identity of unknown tiles while meaning the same to dockutil.
+func normalizedLabel(_ label: String?) -> String? {
+    guard let label, !label.isEmpty else { return nil }
+    return label
+}
+
 public struct URLItem: Codable, Hashable, Sendable {
     public var url: URL
-    public var label: String?
+    /// Nil when absent or empty (see `normalizedLabel`).
+    public var label: String? {
+        didSet { label = normalizedLabel(label) }
+    }
 
     public init(url: URL, label: String? = nil) {
         self.url = url
-        self.label = label
+        self.label = normalizedLabel(label)
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -56,7 +68,7 @@ public struct URLItem: Codable, Hashable, Sendable {
             throw ProfileDecodingError.invalidURL(string, codingPath: (c.codingPath + [CodingKeys.url]).pathString)
         }
         self.url = url
-        label = try c.decodeIfPresent(String.self, forKey: .label)
+        label = normalizedLabel(try c.decodeIfPresent(String.self, forKey: .label))
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -91,7 +103,10 @@ public struct FolderItem: Codable, Hashable, Sendable {
     public var view: FolderView
     public var display: FolderDisplay
     public var sort: FolderSort
-    public var label: String?
+    /// Nil when absent or empty (see `normalizedLabel`).
+    public var label: String? {
+        didSet { label = normalizedLabel(label) }
+    }
 
     public init(
         path: String,
@@ -104,7 +119,7 @@ public struct FolderItem: Codable, Hashable, Sendable {
         self.view = view
         self.display = display
         self.sort = sort
-        self.label = label
+        self.label = normalizedLabel(label)
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -122,7 +137,7 @@ public struct FolderItem: Codable, Hashable, Sendable {
         view = try c.decodeIfPresent(FolderView.self, forKey: .view) ?? .auto
         display = try c.decodeIfPresent(FolderDisplay.self, forKey: .display) ?? .stack
         sort = try c.decodeIfPresent(FolderSort.self, forKey: .sort) ?? .name
-        label = try c.decodeIfPresent(String.self, forKey: .label)
+        label = normalizedLabel(try c.decodeIfPresent(String.self, forKey: .label))
     }
 }
 
@@ -130,11 +145,14 @@ public struct FolderItem: Codable, Hashable, Sendable {
 public struct FileItem: Codable, Hashable, Sendable {
     /// Absolute path. Never `~`-relative.
     public var path: String
-    public var label: String?
+    /// Nil when absent or empty (see `normalizedLabel`).
+    public var label: String? {
+        didSet { label = normalizedLabel(label) }
+    }
 
     public init(path: String, label: String? = nil) {
         self.path = path
-        self.label = label
+        self.label = normalizedLabel(label)
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -149,7 +167,7 @@ public struct FileItem: Codable, Hashable, Sendable {
         try decoder.rejectUnknownKeys(CodingKeys.self, alsoAllowing: extra)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         path = try c.decode(String.self, forKey: .path)
-        label = try c.decodeIfPresent(String.self, forKey: .label)
+        label = normalizedLabel(try c.decodeIfPresent(String.self, forKey: .label))
     }
 }
 
@@ -166,11 +184,14 @@ public enum SpacerKind: String, Codable, Hashable, Sendable, CaseIterable {
 public struct UnknownTile: Codable, Hashable, Sendable {
     /// The plist `tile-type`, e.g. `recents-tile`.
     public var tileType: String
-    public var label: String?
+    /// Nil when absent or empty (see `normalizedLabel`).
+    public var label: String? {
+        didSet { label = normalizedLabel(label) }
+    }
 
     public init(tileType: String, label: String? = nil) {
         self.tileType = tileType
-        self.label = label
+        self.label = normalizedLabel(label)
     }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -185,7 +206,7 @@ public struct UnknownTile: Codable, Hashable, Sendable {
         try decoder.rejectUnknownKeys(CodingKeys.self, alsoAllowing: extra)
         let c = try decoder.container(keyedBy: CodingKeys.self)
         tileType = try c.decode(String.self, forKey: .tileType)
-        label = try c.decodeIfPresent(String.self, forKey: .label)
+        label = normalizedLabel(try c.decodeIfPresent(String.self, forKey: .label))
     }
 }
 
