@@ -123,11 +123,15 @@ import Testing
     @Test func unknownTilesAreStripped() throws {
         let profile = Profile(
             name: "P",
-            apps: [.unknown(UnknownTile(tileType: "recents-tile")), .spacer(.normal)],
+            apps: [
+                .unknown(UnknownTile(tileType: "recents-tile")),
+                .spacer(.normal),
+                .app(AppRef(bundleId: "com.example.a", name: "A")),
+            ],
             others: [.unknown(UnknownTile(tileType: "x-tile", label: "X"))]
         )
         let result = try sanitize(profile)
-        #expect(result.profile.apps == [.spacer(.normal)])
+        #expect(result.profile.apps == [.spacer(.normal), .app(AppRef(bundleId: "com.example.a", name: "A"))])
         #expect(result.profile.others.isEmpty)
         #expect(result.changes.contains(.droppedItem(.apps, index: 0, reason: .unknownTile)))
         #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .unknownTile)))
@@ -471,6 +475,30 @@ import Testing
             #expect(changes.contains(.droppedItem(.apps, index: 0, reason: .unknownTile)))
             #expect(changes.contains(.droppedItem(.others, index: 0, reason: .disallowedPath)))
         }
+    }
+
+    @Test func profileWhoseTilesAreAllDroppedLeavingOnlyASpacerThrows() throws {
+        let profile = Profile(name: "P", apps: [
+            .unknown(UnknownTile(tileType: "recents-tile")),
+            .spacer(.normal),
+        ], others: [
+            .folder(FolderItem(path: "/etc")),
+        ])
+
+        do {
+            _ = try sanitize(profile)
+            Issue.record("Expected everyTileDropped")
+        } catch {
+            guard let error = error as? ImportSanitizationError, case .everyTileDropped = error else {
+                Issue.record("Expected everyTileDropped, got \(error)")
+                return
+            }
+        }
+    }
+
+    @Test func spacersAloneAreNotAnAllDroppedProfile() throws {
+        let result = try sanitize(Profile(name: "P", apps: [.spacer(.normal)]))
+        #expect(result.profile.apps == [.spacer(.normal)])
     }
 
     @Test func emptyProfileIsStillSanitized() throws {

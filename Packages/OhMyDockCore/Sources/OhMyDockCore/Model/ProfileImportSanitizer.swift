@@ -121,7 +121,9 @@ private struct ProfileImportSanitizer {
         dropCollisions(&candidates)
         profile.apps = capped(candidates, in: .apps)
         profile.others = capped(candidates, in: .others)
-        if !(input.apps + input.others).isEmpty, profile.apps.isEmpty, profile.others.isEmpty {
+        // Spacers are not tiles: a profile left with only spacers has lost everything it had.
+        let hadTiles = (input.apps + input.others).contains { !$0.isSpacer }
+        if hadTiles, (profile.apps + profile.others).allSatisfy(\.isSpacer) {
             throw .everyTileDropped(changes: changes)
         }
 
