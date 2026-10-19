@@ -79,6 +79,24 @@ targets:
             echo "warning: dockutil not built — run make dockutil"
           fi
 
+  # Unhosted: compiles the view-model sources directly instead of launching the app, so tests
+  # never start the menu bar app (and its first-launch capture of the live Dock).
+  OhMyDockTests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: AppTests
+      - path: App/Services
+      - path: App/ViewModels
+    dependencies:
+      - package: OhMyDockCore
+        product: OhMyDockCore
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: app.ohmydock.OhMyDockTests
+        ENABLE_TESTING_SEARCH_PATHS: YES
+
 schemes:
   OhMyDock:
     build:
@@ -88,6 +106,8 @@ schemes:
       config: Debug
     test:
       config: Debug
+      targets:
+        - OhMyDockTests
     profile:
       config: Release
     analyze:

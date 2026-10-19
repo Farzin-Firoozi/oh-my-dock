@@ -3,8 +3,9 @@
 generate:
 	xcodegen generate
 
-test:
+test: generate
 	cd Packages/OhMyDockCore && swift test
+	xcodebuild -project OhMyDock.xcodeproj -scheme OhMyDock -configuration Debug -derivedDataPath build test
 
 build: generate
 	xcodebuild -project OhMyDock.xcodeproj -scheme OhMyDock -configuration Debug -derivedDataPath build build
