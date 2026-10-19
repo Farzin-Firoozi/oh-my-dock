@@ -9,8 +9,8 @@ private actor FakeDomainIO: DockDomainIO {
     private(set) var imports: [Data] = []
     private let data: Data
 
-    init() {
-        data = try! PropertyListSerialization.data(
+    init() throws {
+        data = try PropertyListSerialization.data(
             fromPropertyList: ["persistent-apps": [Any](), "persistent-others": [Any]()],
             format: .binary,
             options: 0
@@ -50,7 +50,7 @@ private final class TickingClock: @unchecked Sendable {
     @Test func applyThenUndoRoundTripsThroughRealStores() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let domain = FakeDomainIO()
+        let domain = try FakeDomainIO()
         let restarter = CountingRestarter()
         let profiles = ProfileStore(rootDirectory: root.appendingPathComponent("profiles"))
         let snapshots = SnapshotStore(rootDirectory: root.appendingPathComponent("snapshots"), domainIO: domain)
@@ -88,7 +88,7 @@ private final class TickingClock: @unchecked Sendable {
     @Test func undoTargetIgnoresSnapshotsThatAreNotMutations() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO(), now: TickingClock().now)
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: try FakeDomainIO(), now: TickingClock().now)
         let undo = SnapshotUndoService(snapshots: snapshots, restarter: CountingRestarter())
 
         try await snapshots.save(reason: "First launch", pinned: true)
@@ -107,7 +107,7 @@ private final class TickingClock: @unchecked Sendable {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let restarter = CountingRestarter()
-        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO(), now: TickingClock().now)
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: try FakeDomainIO(), now: TickingClock().now)
         let undo = SnapshotUndoService(snapshots: snapshots, restarter: restarter)
         let history = SnapshotHistoryService(snapshots: snapshots, restarter: restarter)
 
@@ -124,7 +124,7 @@ private final class TickingClock: @unchecked Sendable {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let restarter = CountingRestarter()
-        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO(), now: TickingClock().now)
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: try FakeDomainIO(), now: TickingClock().now)
         let undo = SnapshotUndoService(snapshots: snapshots, restarter: restarter)
 
         try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")

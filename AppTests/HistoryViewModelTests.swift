@@ -139,14 +139,14 @@ private func snapshot(pinned: Bool = false) -> Snapshot {
         #expect(model.isBusy == false)
     }
 
-    @Test func confirmingAfterTheAlertClearedPendingActionStillPerformsTheCapturedAction() async {
+    @Test func confirmingAfterTheAlertClearedPendingActionStillPerformsTheCapturedAction() async throws {
         let item = snapshot()
         let history = FakeHistory([item])
         let model = HistoryViewModel(history: history)
         await model.load()
 
         model.requestRestore(item)
-        let captured = try! #require(model.pendingAction)
+        let captured = try #require(model.pendingAction)
         // SwiftUI clears the alert's item before it runs the button closure.
         model.pendingAction = nil
         await model.confirm(captured)?.value
