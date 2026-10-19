@@ -4,6 +4,8 @@ When the user switches from profile **A** to profile **B**, oh-my-dock can close
 
 ## Flow
 
+> **Order in the implementation:** the Dock layout and preferences are applied, restarted and **verified first** (step 6 below, with rollback). Only then are apps quit and launched. A switch that fails and rolls back never quits anything. Undo restores Dock + preferences, not the apps that were quit.
+
 1. **Compute three sets**
    - **Quit** = running apps from A that are not in B
    - **Keep** = apps in both A and B (left running, untouched)
@@ -47,7 +49,7 @@ None needed in the tested scope. `terminate()` quit a regular app from a non-san
 
 ## AppSwitcher API (`OhMyDockCore/Switching`)
 
-Implemented in task 4.3, not yet wired into `ProfileApplier` or the UI.
+Implemented in task 4.3 and wired into `ProfileApplier` through the `AppSwitching` protocol (task 4.I): the plan is part of `ApplyPreview`, and `execute` runs after the verified Dock apply. A quitting plan needs confirmation unless an automatic trigger runs a profile with `quitOnAutomaticSwitch`.
 
 ```swift
 let switcher = AppSwitcher(provider: LiveRunningApps(), launcher: LiveAppLauncher(),

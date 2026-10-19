@@ -132,6 +132,54 @@ public struct LiveDockDomainIO: DockDomainIO {
 
 // MARK: - Snapshots
 
+/// The Dock preference values a snapshot's apply was about to overwrite, kept next to the plist so
+/// a restore can put them back explicitly (and a rollback can be checked key by key). Only the
+/// keys the apply touched are listed; an entry with no value means the key was absent.
+public struct SnapshotPrefsImage: Codable, Hashable, Sendable {
+    public struct Entry: Codable, Hashable, Sendable {
+        /// `DockPrefs.Key.rawValue`.
+        public var key: String
+        public var bool: Bool?
+        public var double: Double?
+        public var string: String?
+    }
+
+    public var entries: [Entry]
+
+    public init(_ image: DockPrefsRollbackImage) {
+        entries = image.previousValues
+            .map { key, value -> Entry in
+                var entry = Entry(key: key.rawValue)
+                switch value {
+                case .bool(let flag)?: entry.bool = flag
+                case .double(let number)?: entry.double = number
+                case .string(let text)?: entry.string = text
+                case nil: break
+                }
+                return entry
+            }
+            .sorted { $0.key < $1.key }
+    }
+
+    /// The image to hand to `DockPrefsWriting.rollback`. Entries this version does not know are skipped.
+    public var rollbackImage: DockPrefsRollbackImage {
+        var values: [DockPrefs.Key: DockPrefs.Value?] = [:]
+        for entry in entries {
+            guard let key = DockPrefs.Key(rawValue: entry.key) else { continue }
+            if let flag = entry.bool {
+                values[key] = .bool(flag)
+            } else if let number = entry.double {
+                values[key] = .double(number)
+            } else if let text = entry.string {
+                values[key] = .string(text)
+            } else {
+                values[key] = .some(nil)
+            }
+        }
+        return DockPrefsRollbackImage(previousValues: values)
+    }
+}
+
 public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
     public var id: UUID
     public var createdAt: Date
@@ -140,6 +188,9 @@ public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
     public var byteSize: Int
     public var sha256: String
     public var pinned: Bool
+    /// Absent in snapshots written before Dock preferences were applied; those restore from the
+    /// plist alone.
+    public var prefsImage: SnapshotPrefsImage?
 
     public init(
         id: UUID,
@@ -148,7 +199,8 @@ public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
         profileName: String? = nil,
         byteSize: Int,
         sha256: String,
-        pinned: Bool = false
+        pinned: Bool = false,
+        prefsImage: SnapshotPrefsImage? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -157,6 +209,7 @@ public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
         self.byteSize = byteSize
         self.sha256 = sha256
         self.pinned = pinned
+        self.prefsImage = prefsImage
     }
 }
 
@@ -179,6 +232,9 @@ public enum SnapshotStoreError: Error, Equatable, Sendable {
     case checksumMismatch(id: UUID, expected: String, actual: String)
     case restoreVerificationFailed(UUID)
     case invalidKeepCount(Int)
+    /// The domain was restored but the snapshot's recorded Dock preferences could not be put back
+    /// and read back (or the writer failed).
+    case prefsRestoreFailed(UUID, UnderlyingError)
     /// The restore failed, and so did putting the previous domain back (the import failed, or the
     /// read-back after it did not match). The Dock preferences may be half-written; `restore` is
     /// the error that started it, `recovery` the one that stopped the way back.
@@ -243,9 +299,16 @@ public actor SnapshotStore {
     public func save(
         reason: String,
         profileName: String? = nil,
-        pinned: Bool = false
+        pinned: Bool = false,
+        prefsPreImage: DockPrefsRollbackImage? = nil
     ) async throws -> Snapshot {
-        try await save(reason: reason, profileName: profileName, pinned: pinned, alsoProtecting: nil)
+        try await save(
+            reason: reason,
+            profileName: profileName,
+            pinned: pinned,
+            prefsPreImage: prefsPreImage,
+            alsoProtecting: nil
+        )
     }
 
     @discardableResult
@@ -255,6 +318,7 @@ public actor SnapshotStore {
         reason: String,
         profileName: String?,
         pinned: Bool,
+        prefsPreImage: DockPrefsRollbackImage?,
         alsoProtecting extraProtectedID: UUID?
     ) async throws -> Snapshot {
         try ensureRootDirectoryExists()
@@ -283,7 +347,8 @@ public actor SnapshotStore {
             profileName: profileName,
             byteSize: data.count,
             sha256: sha256(of: data),
-            pinned: pinned
+            pinned: pinned,
+            prefsImage: prefsPreImage.map(SnapshotPrefsImage.init)
         )
         let plistURL = self.plistURL(for: id)
 
@@ -365,7 +430,16 @@ public actor SnapshotStore {
         return try Data(contentsOf: url)
     }
 
-    public func restore(id: UUID, createSafetySnapshot: Bool = true) async throws {
+    /// Replaces the Dock domain with the snapshot's. With a `prefsWriter`, the Dock preference
+    /// values the snapshot recorded (see `Snapshot.prefsImage`) are then written explicitly and read
+    /// back, so they are right even where the plist round trip leaves a stale cached value. A
+    /// snapshot without them (taken before preferences were applied) restores from the plist alone.
+    /// Any failure puts the previous domain back, as for the plist itself.
+    public func restore(
+        id: UUID,
+        createSafetySnapshot: Bool = true,
+        prefsWriter: (any DockPrefsWriting)? = nil
+    ) async throws {
         let snapshot = try loadMetadata(id: id)
         let data = try load(id: id)
         try verify(data: data, against: snapshot)
@@ -378,6 +452,7 @@ public actor SnapshotStore {
                 reason: "Before restoring \(date)",
                 profileName: nil,
                 pinned: false,
+                prefsPreImage: nil,
                 alsoProtecting: id
             )
         }
@@ -424,6 +499,16 @@ public actor SnapshotStore {
                 id: id,
                 via: verificationURL
             )
+            if let prefsWriter, let image = snapshot.prefsImage?.rollbackImage {
+                do {
+                    try prefsWriter.rollback(image)
+                    guard try prefsWriter.holds(image) else {
+                        throw SnapshotStoreError.restoreVerificationFailed(id)
+                    }
+                } catch {
+                    throw SnapshotStoreError.prefsRestoreFailed(id, UnderlyingError(error))
+                }
+            }
         } catch {
             if let recoveryError = await rollBackDomain(
                 to: currentData,

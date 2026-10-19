@@ -74,7 +74,7 @@ public final class InMemoryDockPrefsDomainIO: DockPrefsDomainIO, @unchecked Send
 // MARK: - Capture, diff, rollback
 
 /// Snapshot of every managed preference key in the domain. A missing entry means the key is absent.
-public struct DockPrefsCapture: Equatable, Sendable {
+public struct DockPrefsCapture: Hashable, Sendable {
     public var values: [DockPrefs.Key: DockPrefs.Value]
 
     public init(values: [DockPrefs.Key: DockPrefs.Value] = [:]) {
@@ -87,8 +87,8 @@ public struct DockPrefsCapture: Equatable, Sendable {
 }
 
 /// One planned preference change for diff preview.
-public struct PrefsDiff: Equatable, Sendable {
-    public struct Entry: Equatable, Sendable {
+public struct PrefsDiff: Hashable, Sendable {
+    public struct Entry: Hashable, Sendable {
         public var key: DockPrefs.Key
         /// Current domain value, or `nil` when the key is absent.
         public var current: DockPrefs.Value?
@@ -111,7 +111,7 @@ public struct PrefsDiff: Equatable, Sendable {
 }
 
 /// Previous domain values for keys touched by `apply`, used to roll back on failure.
-public struct DockPrefsRollbackImage: Equatable, Sendable {
+public struct DockPrefsRollbackImage: Hashable, Sendable {
     /// `nil` means the key was absent before the write.
     public var previousValues: [DockPrefs.Key: DockPrefs.Value?]
 
@@ -140,6 +140,34 @@ public enum DockPrefsWriterError: Error, Equatable, Sendable {
     case invalidEnumValue(key: DockPrefs.Key, raw: String)
 }
 
+// MARK: - Writing seam
+
+/// What `ProfileApplier` needs from a prefs writer. `DockPrefsWriter` is the live one; tests wrap
+/// it around an in-memory domain.
+public protocol DockPrefsWriting: Sendable {
+    func captureCurrent() throws -> DockPrefsCapture
+    func diff(current: DockPrefsCapture, target: DockPrefs) throws -> PrefsDiff
+    func apply(_ target: DockPrefs, expecting baseline: DockPrefsCapture?) throws -> DockPrefsApplyResult
+    func rollback(_ image: DockPrefsRollbackImage) throws
+}
+
+extension DockPrefsWriting {
+    /// True when every key in `image` currently holds the value the image recorded (absent included).
+    public func holds(_ image: DockPrefsRollbackImage) throws -> Bool {
+        let current = try captureCurrent()
+        return image.previousValues.allSatisfy { current[$0.key] == $0.value }
+    }
+}
+
+extension DockPrefsRollbackImage {
+    /// The image that puts every key in `diff` back to what `capture` holds.
+    public init(restoring diff: PrefsDiff, from capture: DockPrefsCapture) {
+        var values: [DockPrefs.Key: DockPrefs.Value?] = [:]
+        for entry in diff.entries { values[entry.key] = capture[entry.key] }
+        self.init(previousValues: values)
+    }
+}
+
 // MARK: - Writer
 
 /// Writes profile `DockPrefs` into the Dock preferences domain with validation, diffing, and rollback.
@@ -147,7 +175,7 @@ public enum DockPrefsWriterError: Error, Equatable, Sendable {
 /// Intended for step 7 of `ProfileApplier.apply` (after tile writes, before `DockRestarter`).
 /// Does not restart the Dock; set `DockPrefsApplyResult.needsDockRestart` and let the applier
 /// perform a single restart with tile changes.
-public struct DockPrefsWriter: Sendable {
+public struct DockPrefsWriter: DockPrefsWriting {
     private let domainIO: any DockPrefsDomainIO
 
     public init(domainIO: any DockPrefsDomainIO = CFPreferencesDockPrefsDomainIO()) {

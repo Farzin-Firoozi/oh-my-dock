@@ -33,6 +33,7 @@ public enum ImportSanitizationChange: Hashable, Sendable {
     case truncatedString(field: String)
     case forcedQuitScopeNone(was: SwitchingOptions.QuitScope)
     case clearedOfferForceQuit
+    case clearedQuitOnAutomaticSwitch
     case idReassigned
 }
 
@@ -69,7 +70,7 @@ extension Profile {
     ///   paths and URLs over `maxImportLocationLength` drop their tile; names, labels and ids
     ///   over `maxImportTextLength` are shortened (labels, names) or cleared (cask, which must
     ///   also look like a cask token) or drop the tile (bundle id).
-    /// - Switching cannot quit anything (`quitScope = .none`, `offerForceQuit = false`) and no
+    /// - Switching cannot quit anything (`quitScope = .none`, `offerForceQuit = false`, `quitOnAutomaticSwitch = false`) and no
     ///   app launches on switch.
     /// - The profile gets a fresh `id` so an import can never overwrite a local profile.
     ///
@@ -134,6 +135,10 @@ private struct ProfileImportSanitizer {
         if profile.switching.offerForceQuit {
             changes.append(.clearedOfferForceQuit)
             profile.switching.offerForceQuit = false
+        }
+        if profile.switching.quitOnAutomaticSwitch {
+            changes.append(.clearedQuitOnAutomaticSwitch)
+            profile.switching.quitOnAutomaticSwitch = false
         }
 
         do {
