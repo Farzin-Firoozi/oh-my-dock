@@ -405,6 +405,153 @@ import Testing
         #expect(snapshot.pinned)
     }
 
+    @Test func pinnedSnapshotOfAnotherDockIsNotReusedAndIsUnpinned() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        let snapshotStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist())
+        )
+        // A leftover from an earlier attempt, taken when the Dock held an unrecognised tile.
+        let leftoverStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist(label: "Finder"))
+        )
+        let stale = try await leftoverStore.save(reason: "First launch", pinned: true)
+        let bootstrapper = FirstLaunchBootstrapper(
+            reader: { DockState() },
+            profileStore: ProfileStore(rootDirectory: tempDir.appendingPathComponent("profiles")),
+            snapshotStore: snapshotStore,
+            markerURL: tempDir.appendingPathComponent(".first-launch-complete")
+        )
+
+        let result = try await bootstrapper.runIfNeeded()
+
+        guard case .created(_, let snapshot, _) = result else {
+            Issue.record("Expected .created but got \(result)")
+            return
+        }
+        #expect(snapshot.id != stale.id)
+        #expect(snapshot.pinned)
+        let all = await snapshotStore.list().snapshots
+        #expect(all.first { $0.id == stale.id }?.pinned == false)
+        #expect(all.filter { $0.pinned && $0.reason == "First launch" }.map(\.id) == [snapshot.id])
+    }
+
+    @Test func dockChangingDuringTheCaptureIsRetriedOnce() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        let profileStore = ProfileStore(rootDirectory: tempDir.appendingPathComponent("profiles"))
+        let snapshotStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist())
+        )
+        let safari = DockItem.app(AppRef(bundleId: "com.apple.Safari", name: "Safari"))
+        let notes = DockItem.app(AppRef(bundleId: "com.apple.Notes", name: "Notes"))
+        // The second read (after the snapshot) sees an edit; every later read sees it too.
+        let reads = ReadCounter()
+        let bootstrapper = FirstLaunchBootstrapper(
+            reader: { await reads.next() == 1 ? DockState(apps: [safari]) : DockState(apps: [safari, notes]) },
+            profileStore: profileStore,
+            snapshotStore: snapshotStore,
+            markerURL: tempDir.appendingPathComponent(".first-launch-complete")
+        )
+
+        let result = try await bootstrapper.runIfNeeded()
+
+        guard case .created(let profile, let snapshot, _) = result else {
+            Issue.record("Expected .created but got \(result)")
+            return
+        }
+        #expect(profile.apps == [safari, notes])
+        // The snapshot taken around the edited read was thrown away.
+        #expect(await snapshotStore.list().snapshots.map(\.id) == [snapshot.id])
+    }
+
+    @Test func dockThatKeepsChangingFailsWithoutSavingAnything() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        let profileStore = ProfileStore(rootDirectory: tempDir.appendingPathComponent("profiles"))
+        let snapshotStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist())
+        )
+        let markerURL = tempDir.appendingPathComponent(".first-launch-complete")
+        let reads = ReadCounter()
+        let bootstrapper = FirstLaunchBootstrapper(
+            reader: {
+                let n = await reads.next()
+                return DockState(apps: [.app(AppRef(bundleId: "com.example.\(n)", name: "App \(n)"))])
+            },
+            profileStore: profileStore,
+            snapshotStore: snapshotStore,
+            markerURL: markerURL
+        )
+
+        await #expect(throws: FirstLaunchError.dockChangedDuringCapture) {
+            try await bootstrapper.runIfNeeded()
+        }
+
+        #expect(await snapshotStore.list().snapshots.isEmpty)
+        #expect(await profileStore.list().profiles.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: markerURL.path))
+    }
+
+    @Test func duplicateLabelsInTheLiveDockAreDisambiguated() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        let profileStore = ProfileStore(rootDirectory: tempDir.appendingPathComponent("profiles"))
+        let snapshotStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist())
+        )
+        let state = DockState(
+            apps: [
+                .app(AppRef(bundleId: "com.example.a", name: "Same")),
+                .app(AppRef(bundleId: "com.example.b", name: "Same")),
+                .app(AppRef(bundleId: "com.example.c", name: "Same (2)")),
+                .app(AppRef(bundleId: "com.example.d", name: "Pathed", path: "/Applications/Solo.app")),
+                .app(AppRef(bundleId: "com.example.e", name: "Pathed", path: "/Other/Solo.app")),
+            ],
+            others: [
+                .folder(FolderItem(path: "/Users/me/Documents/Docs")),
+                .folder(FolderItem(path: "/Users/me/Work/Docs")),
+                .folder(FolderItem(path: "/Users/me/Old/Docs")),
+            ]
+        )
+        let bootstrapper = FirstLaunchBootstrapper(
+            reader: { state },
+            profileStore: profileStore,
+            snapshotStore: snapshotStore,
+            markerURL: tempDir.appendingPathComponent(".first-launch-complete")
+        )
+
+        let result = try await bootstrapper.runIfNeeded()
+
+        guard case .created(let profile, _, let dropped) = result else {
+            Issue.record("Expected .created but got \(result)")
+            return
+        }
+        try profile.validate()
+        #expect(profile.others == [
+            .folder(FolderItem(path: "/Users/me/Documents/Docs")),
+            .folder(FolderItem(path: "/Users/me/Work/Docs", label: "Docs (2)")),
+            .folder(FolderItem(path: "/Users/me/Old/Docs", label: "Docs (3)")),
+        ])
+        #expect(profile.apps == [
+            .app(AppRef(bundleId: "com.example.a", name: "Same")),
+            .app(AppRef(bundleId: "com.example.b", name: "Same (3)")),
+            .app(AppRef(bundleId: "com.example.c", name: "Same (2)")),
+            .app(AppRef(bundleId: "com.example.d", name: "Pathed", path: "/Applications/Solo.app")),
+        ])
+        // The second Solo.app cannot be relabelled.
+        #expect(dropped == [.app(AppRef(bundleId: "com.example.e", name: "Pathed", path: "/Other/Solo.app"))])
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() throws -> URL {
@@ -418,17 +565,24 @@ import Testing
         try? FileManager.default.removeItem(at: url)
     }
 
-    private func dockPlist(label: String = "Finder") throws -> Data {
+    /// An empty Dock, or one with a single unrecognised tile labelled `label`.
+    private func dockPlist(label: String? = nil) throws -> Data {
         try PropertyListSerialization.data(
             fromPropertyList: [
-                "persistent-apps": [
-                    ["tile-data": ["file-label": label]],
-                ],
+                "persistent-apps": label.map { [["tile-data": ["file-label": $0]]] } ?? [],
                 "persistent-others": [],
             ],
             format: .binary,
             options: 0
         )
+    }
+}
+
+private actor ReadCounter {
+    private var count = 0
+    func next() -> Int {
+        count += 1
+        return count
     }
 }
 

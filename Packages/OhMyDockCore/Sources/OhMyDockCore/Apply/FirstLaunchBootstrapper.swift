@@ -1,5 +1,12 @@
 import Foundation
 
+/// Why the first-launch capture gave up.
+public enum FirstLaunchError: Error, Equatable, Sendable {
+    /// The Dock changed while it was being captured (twice in a row), so the profile and the safety
+    /// snapshot would not describe the same Dock. Nothing was saved and no marker was written.
+    case dockChangedDuringCapture
+}
+
 /// Bootstraps the application on first launch by capturing the current live Dock
 /// state as a safety-net profile named "Default" and creating a pinned snapshot.
 public struct FirstLaunchBootstrapper: Sendable {
@@ -75,9 +82,16 @@ public struct FirstLaunchBootstrapper: Sendable {
     /// - Skips if the marker file already exists or if `skipIfProfilesExist` is true
     ///   and the profile store contains at least one profile (in which case the marker is written).
     /// - Otherwise reads the current Dock, filters out `.unknown` items and validates a profile
-    ///   named "Default" (or "Default (2)" on collision). Only then does it pin a "First launch"
-    ///   snapshot (reusing an existing pinned one), save the profile and write the marker file
-    ///   atomically. A failed read or validation leaves no snapshot behind.
+    ///   named "Default" (or "Default (2)" on collision). Tiles whose label another tile of the
+    ///   section already has get a numbered label ("Docs (2)"); an app that cannot be relabelled
+    ///   is dropped and reported like an unknown tile. Only then does it pin a "First launch"
+    ///   snapshot, re-read the Dock and compare: when the Dock changed in between, the snapshot
+    ///   (if new) is deleted and the capture is retried once, then `FirstLaunchError` is thrown.
+    ///   Profile and snapshot are therefore the same capture.
+    /// - An earlier pinned "First launch" snapshot is reused only while it still equals the Dock;
+    ///   otherwise a fresh one is taken and the stale one is unpinned (kept, but prunable).
+    ///   A failed read, validation or capture leaves no new snapshot behind.
+    /// - Saves the profile and writes the marker file atomically.
     /// - Thread-safe and serialized by an internal coordinator.
     public func runIfNeeded(skipIfProfilesExist: Bool? = nil) async throws -> Result {
         let shouldSkipIfProfiles = skipIfProfilesExist ?? self.skipIfProfilesExist
@@ -101,67 +115,130 @@ public struct FirstLaunchBootstrapper: Sendable {
             // 3. Resolve profile name
             let profileName = await self.resolveProfileName(base: "Default")
 
-            // 4. Read the Dock
-            let dockState = try await reader()
+            // 4. Capture the Dock and the snapshot as one: read, validate, snapshot, read again.
+            var attempt = 0
+            while true {
+                let dockState = try await reader()
+                let (profile, droppedItems) = try Self.profile(named: profileName, from: dockState)
 
-            // 5. Filter out `.unknown` items and build profile
-            var validApps: [DockItem] = []
-            var validOthers: [DockItem] = []
-            var droppedItems: [DockItem] = []
-
-            for item in dockState.apps {
-                if case .unknown = item {
-                    droppedItems.append(item)
-                } else {
-                    validApps.append(item)
+                let (snapshot, isNew, stale) = try await pinnedFirstLaunchSnapshot(
+                    profileName: profileName,
+                    matching: dockState
+                )
+                guard try await reader() == dockState else {
+                    if isNew { try? await snapshotStore.delete(id: snapshot.id) }
+                    attempt += 1
+                    if attempt >= 2 { throw FirstLaunchError.dockChangedDuringCapture }
+                    continue
                 }
+
+                // 5. Save profile to store
+                try await profileStore.save(profile)
+                for old in stale { try? await snapshotStore.unpin(id: old.id) }
+
+                // 6. Write marker atomically LAST
+                try writeMarkerAtomically(fileManager: fileManager)
+
+                return .created(profile: profile, snapshot: snapshot, droppedItems: droppedItems)
             }
-
-            for item in dockState.others {
-                if case .unknown = item {
-                    droppedItems.append(item)
-                } else {
-                    validOthers.append(item)
-                }
-            }
-
-            let profile = Profile(
-                name: profileName,
-                apps: validApps,
-                others: validOthers
-            )
-
-            try profile.validate()
-
-            // 6. Only now that the capture is known good, pin a safety snapshot. A failed
-            // attempt leaves nothing behind, and a retry reuses the snapshot of an earlier
-            // attempt that got this far instead of piling up another pinned one.
-            let snapshot = try await pinnedFirstLaunchSnapshot(profileName: profileName)
-
-            // 7. Save profile to store
-            try await profileStore.save(profile)
-
-            // 8. Write marker atomically LAST
-            try writeMarkerAtomically(fileManager: fileManager)
-
-            return .created(profile: profile, snapshot: snapshot, droppedItems: droppedItems)
         }
+    }
+
+    /// The captured profile and the tiles it could not hold (unknown tiles, apps with a label
+    /// another tile already has).
+    private static func profile(
+        named name: String,
+        from dockState: DockState
+    ) throws -> (Profile, [DockItem]) {
+        var dropped: [DockItem] = []
+        func capturable(_ items: [DockItem]) -> [DockItem] {
+            let known = items.filter {
+                if case .unknown = $0 { dropped.append($0); return false }
+                return true
+            }
+            return disambiguatingLabels(known, dropping: &dropped)
+        }
+        let profile = Profile(
+            name: name,
+            apps: capturable(dockState.apps),
+            others: capturable(dockState.others)
+        )
+        try profile.validate()
+        return (profile, dropped)
+    }
+
+    /// Gives folders, files and URLs whose computed label an earlier tile already has an explicit
+    /// "Label (2)", "(3)", ... that is free in the section. A pathless app is renamed likewise (its
+    /// name is its label). An app whose label comes from its path cannot be relabelled and goes
+    /// into `dropped`.
+    private static func disambiguatingLabels(_ items: [DockItem], dropping dropped: inout [DockItem]) -> [DockItem] {
+        var used = Set(items.filter { !$0.isSpacer }.map(DockutilPlanner.computedLabel(of:)))
+        var seen: Set<String> = []
+        var result: [DockItem] = []
+        func freeLabel(_ base: String) -> String {
+            var n = 2
+            while used.contains("\(base) (\(n))") { n += 1 }
+            let label = "\(base) (\(n))"
+            used.insert(label)
+            return label
+        }
+        for item in items {
+            if item.isSpacer { result.append(item); continue }
+            let label = DockutilPlanner.computedLabel(of: item)
+            if label.isEmpty || seen.insert(label).inserted { result.append(item); continue }
+            switch item {
+            case .folder(var folder):
+                folder.label = freeLabel(label)
+                result.append(.folder(folder))
+            case .file(var file):
+                file.label = freeLabel(label)
+                result.append(.file(file))
+            case .url(var url):
+                url.label = freeLabel(label)
+                result.append(.url(url))
+            case .app(var app) where (app.path ?? "").isEmpty:
+                app.name = freeLabel(label)
+                result.append(.app(app))
+            default:
+                dropped.append(item)
+            }
+        }
+        return result
     }
 
     static let snapshotReason = "First launch"
 
-    /// The newest pinned first-launch snapshot, or a new one when none exists yet.
-    private func pinnedFirstLaunchSnapshot(profileName: String) async throws -> Snapshot {
-        let existing = await snapshotStore.list().snapshots
-            .first { $0.pinned && $0.reason == Self.snapshotReason }
-        if let existing {
-            return existing
+    /// A pinned first-launch snapshot of the Dock as it is now: the newest existing one that still
+    /// equals `dockState`, else a new one. `stale` lists the pinned ones that do not match, for
+    /// the caller to unpin once the capture succeeded.
+    private func pinnedFirstLaunchSnapshot(
+        profileName: String,
+        matching dockState: DockState
+    ) async throws -> (snapshot: Snapshot, isNew: Bool, stale: [Snapshot]) {
+        let pinned = await snapshotStore.list().snapshots
+            .filter { $0.pinned && $0.reason == Self.snapshotReason }
+        var stale: [Snapshot] = []
+        for candidate in pinned {
+            if await storedDock(of: candidate) == dockState {
+                return (candidate, false, stale)
+            }
+            stale.append(candidate)
         }
-        return try await snapshotStore.save(
+        let snapshot = try await snapshotStore.save(
             reason: Self.snapshotReason,
             profileName: profileName,
             pinned: true
         )
+        return (snapshot, true, stale)
+    }
+
+    /// The Dock a snapshot holds, or nil when it cannot be read.
+    private func storedDock(of snapshot: Snapshot) async -> DockState? {
+        guard let data = try? await snapshotStore.load(id: snapshot.id),
+              let plist = try? PropertyListSerialization.propertyList(from: data, options: [], format: nil),
+              let domain = DockPlistValues.dictionary(plist)
+        else { return nil }
+        return DockPlistParser.parse(domain: domain)
     }
 
     private func writeMarkerAtomically(fileManager: FileManager) throws {
