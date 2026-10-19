@@ -552,7 +552,7 @@ struct ProfileApplierTests {
         #expect(preview.skipped == [SkippedItem(section: .apps, index: 1, app: missing)])
         #expect(preview.target == DockState(apps: [calculator, notes], others: [Sample.example]))
 
-        let result = try await applier.apply(wanted)
+        let result = try await applier.apply(wanted) { _ in true }
         guard case let .applied(report) = result else {
             Issue.record("Expected .applied, got \(result)")
             return
@@ -591,19 +591,106 @@ struct ProfileApplierTests {
         #expect(preview.target.apps == [.app(resolved)])
     }
 
-    @Test func ifEveryAppIsMissingTheDockIsStillCleared() async throws {
-        let env = try Env(current: DockState(apps: [calculator]))
+    @Test func skippingAppsRequiresAConfirmation() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
         defer { env.cleanup() }
         let missing = AppRef(bundleId: "com.example.missing", name: "Missing")
+        let resolver: ProfileApplier.AppPathResolver = { $0.bundleId == missing.bundleId ? nil : $0.path }
+        let applier = env.applier(resolvePath: resolver)
+        let wanted = profile(apps: [calculator, .app(missing)])
 
-        let result = try await env.applier(resolvePath: { _ in nil }).apply(profile(apps: [.app(missing)]))
+        let error = await applyError { try await applier.apply(wanted) }
 
-        guard case let .applied(report) = result else {
+        guard case let .confirmationRequired(skipped)? = error else {
+            Issue.record("Expected confirmationRequired, got \(String(describing: error))")
+            return
+        }
+        #expect(skipped == [SkippedItem(section: .apps, index: 1, app: missing)])
+        #expect(await env.backend.appliedBatches.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+        #expect(await env.restarter.count == 0)
+    }
+
+    @Test func declinedConfirmationLeavesSkippedAppsUnapplied() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let missing = AppRef(bundleId: "com.example.missing", name: "Missing")
+        let resolver: ProfileApplier.AppPathResolver = { $0.bundleId == missing.bundleId ? nil : $0.path }
+        let seen = PreviewBox()
+
+        let result = try await env.applier(resolvePath: resolver)
+            .apply(profile(apps: [calculator, .app(missing)])) { preview in
+                await seen.set(preview)
+                return false
+            }
+
+        #expect(result == .cancelled(rolledBack: false))
+        #expect(await seen.value?.skipped.count == 1)
+        #expect(await env.backend.appliedBatches.isEmpty)
+    }
+
+    @Test func noConfirmationIsNeededWhenNothingIsSkipped() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+
+        let result = try await env.applier().apply(profile(apps: [calculator]))
+
+        guard case .applied = result else {
             Issue.record("Expected .applied, got \(result)")
             return
         }
-        #expect(report.skipped.count == 1)
-        #expect(await env.backend.state == DockState())
+    }
+
+    @Test func ifEveryAppIsMissingTheSectionIsNeverEmptied() async throws {
+        let env = try Env(current: DockState(apps: [calculator], others: [Sample.example]))
+        defer { env.cleanup() }
+        let missing = AppRef(bundleId: "com.example.missing", name: "Missing")
+        let applier = env.applier(resolvePath: { _ in nil })
+        let wanted = profile(apps: [.app(missing)], others: [Sample.example])
+
+        let preview = try await applier.preview(wanted)
+        #expect(preview.emptiedSections == [.apps])
+
+        // Not even a confirmation unlocks it.
+        let error = await applyError { try await applier.apply(wanted) { _ in true } }
+
+        guard case let .wouldEmptySection(section, skipped)? = error else {
+            Issue.record("Expected wouldEmptySection, got \(String(describing: error))")
+            return
+        }
+        #expect(section == .apps)
+        #expect(skipped.map(\.app) == [missing])
+        #expect(await env.backend.appliedBatches.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+        #expect(await env.backend.state == DockState(apps: [calculator], others: [Sample.example]))
+    }
+
+    @Test func aSectionTheProfileLeavesEmptyOnPurposeStillClears() async throws {
+        let env = try Env(current: DockState(apps: [calculator], others: [Sample.example]))
+        defer { env.cleanup() }
+
+        let result = try await env.applier().apply(profile(apps: [calculator]))
+
+        guard case .applied = result else {
+            Issue.record("Expected .applied, got \(result)")
+            return
+        }
+        #expect(await env.backend.state == DockState(apps: [calculator]))
+    }
+
+    @Test func missingAppsInAnAlreadyEmptySectionAreJustSkipped() async throws {
+        let env = try Env(current: DockState())
+        defer { env.cleanup() }
+        let missing = AppRef(bundleId: "com.example.missing", name: "Missing")
+
+        let result = try await env.applier(resolvePath: { _ in nil })
+            .apply(profile(apps: [.app(missing)], others: [Sample.example])) { _ in true }
+
+        guard case .applied = result else {
+            Issue.record("Expected .applied, got \(result)")
+            return
+        }
+        #expect(await env.backend.state == DockState(others: [Sample.example]))
     }
 
     // MARK: Rollback
@@ -1083,7 +1170,7 @@ struct ProfileApplierIntegrationTests {
         let resolver: ProfileApplier.AppPathResolver = { $0.bundleId == missing.bundleId ? nil : $0.path }
 
         let result = try await f.applier(resolvePath: resolver)
-            .apply(profile(apps: [calculator, .app(missing), notes]))
+            .apply(profile(apps: [calculator, .app(missing), notes])) { _ in true }
 
         guard case let .applied(report) = result else {
             Issue.record("Expected .applied, got \(result)")

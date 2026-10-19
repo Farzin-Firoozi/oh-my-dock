@@ -34,6 +34,9 @@ public struct ApplyPreview: Hashable, Sendable {
     public let target: DockState
     public let plan: DockPlan
     public let skipped: [SkippedItem]
+    /// Sections the profile fills but the Dock would end up with none of, because every app in it
+    /// was skipped. `apply` refuses these (`ApplyError.wouldEmptySection`).
+    public let emptiedSections: [DockSection]
     /// True when writing the plan also clears the Dock's recent apps: the plan is a full rewrite,
     /// or the backend turns it into one (dockutil does when a tile cannot be addressed uniquely).
     /// Incremental edits leave them alone.
@@ -45,6 +48,7 @@ public struct ApplyPreview: Hashable, Sendable {
         target: DockState,
         plan: DockPlan,
         skipped: [SkippedItem],
+        emptiedSections: [DockSection] = [],
         clearsRecentApps: Bool = false
     ) {
         self.profileName = profileName
@@ -52,6 +56,7 @@ public struct ApplyPreview: Hashable, Sendable {
         self.target = target
         self.plan = plan
         self.skipped = skipped
+        self.emptiedSections = emptiedSections
         self.clearsRecentApps = clearsRecentApps || plan.requiresFullRewrite
     }
 }
@@ -86,6 +91,12 @@ public enum ApplyError: Error, LocalizedError, Sendable {
     /// The Dock changed after the plan was computed, so its indices may be stale. Nothing was
     /// written; apply again to plan against the current Dock.
     case dockChanged
+    /// Apps of the profile are missing and would be left out, and no `confirm` was given to let
+    /// the user accept that. Nothing was written.
+    case confirmationRequired(skipped: [SkippedItem])
+    /// Every tile the profile has in `section` is a missing app, so applying it would empty a
+    /// section that has tiles now. Nothing was written.
+    case wouldEmptySection(DockSection, skipped: [SkippedItem])
     /// The backend refused the plan before writing anything (e.g. dockutil cannot express it).
     /// Nothing was snapshotted, written, restored or restarted.
     case rejectedByBackend(original: any Error)
@@ -103,6 +114,12 @@ public enum ApplyError: Error, LocalizedError, Sendable {
             "The profile cannot be applied: \(issues.map(\.message).joined(separator: "; "))"
         case .dockChanged:
             "The Dock changed while the profile was being prepared. Nothing was changed; try again."
+        case let .confirmationRequired(skipped):
+            "\(skipped.count) app(s) of the profile were not found and need confirmation to be left out: "
+                + skipped.map { $0.app.name.isEmpty ? $0.app.bundleId : $0.app.name }.joined(separator: ", ")
+        case let .wouldEmptySection(section, _):
+            "None of the apps the profile has in the \(section.rawValue) section were found; "
+                + "applying it would empty that section."
         case let .rejectedByBackend(original):
             "The Dock cannot be changed this way; nothing was changed: \(original)"
         case let .failedAndRolledBack(original):
@@ -121,7 +138,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 ///
 /// Flow of `apply`:
 /// 1. Validate the profile, resolve app paths, read the Dock and plan the change.
-/// 2. Unsatisfiable plan, or one the backend refuses up front (`preflight`): throw. Nothing was
+/// 2. Apps that cannot be found are left out of the target, but only when `confirm` is given and
+///    accepts; without it `ApplyError.confirmationRequired`. If that would empty a section the
+///    profile fills, `ApplyError.wouldEmptySection`, confirmed or not. Unsatisfiable plan, or one the backend refuses up front (`preflight`): throw. Nothing was
 ///    written, so nothing is restored or restarted. Empty plan: `.noChanges`. No snapshot, no restart.
 /// 3. `confirm` declines: `.cancelled`.
 /// 4. Snapshot the Dock, then re-read it. When it no longer equals the state the plan was
@@ -255,7 +274,14 @@ public actor ProfileApplier {
             let first = try await makePreview(profile: profile, resolved: resolved, current: try await backend.read())
 
             if first.plan.unsatisfiable { throw ApplyError.unsatisfiable(issues: first.plan.issues) }
+            if let section = first.emptiedSections.first {
+                throw ApplyError.wouldEmptySection(section, skipped: first.skipped.filter { $0.section == section })
+            }
             if first.plan.isEmpty { return .noChanges(first) }
+            // Leaving apps out is only allowed with the user's say-so.
+            if confirm == nil, !first.skipped.isEmpty {
+                throw ApplyError.confirmationRequired(skipped: first.skipped)
+            }
             if Task.isCancelled { return .cancelled(rolledBack: false) }
 
             if let confirm {
@@ -371,6 +397,8 @@ public actor ProfileApplier {
     private struct Resolved {
         var target: DockState
         var skipped: [SkippedItem]
+        /// Sections in which every tile of the profile is a skipped app.
+        var emptiedByResolution: Set<DockSection>
     }
 
     /// The profile's layout with app paths resolved; apps that cannot be found are dropped.
@@ -391,7 +419,10 @@ public actor ProfileApplier {
                 target[section].append(.app(app))
             }
         }
-        return Resolved(target: target, skipped: skipped)
+        let emptied = Set(DockSection.allCases.filter { section in
+            !profile.items(in: section).isEmpty && target[section].isEmpty
+        })
+        return Resolved(target: target, skipped: skipped, emptiedByResolution: emptied)
     }
 
     private func makePreview(
@@ -419,6 +450,9 @@ public actor ProfileApplier {
             target: target,
             plan: plan,
             skipped: resolved.skipped,
+            emptiedSections: DockSection.allCases.filter {
+                resolved.target[$0].isEmpty && resolved.emptiedByResolution.contains($0) && !current[$0].isEmpty
+            },
             clearsRecentApps: clearsRecentApps
         )
     }
