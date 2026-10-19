@@ -64,8 +64,9 @@ extension Profile {
     ///   app launches on switch.
     /// - The profile gets a fresh `id` so an import can never overwrite a local profile.
     ///
-    /// Paths are checked as text and, when they exist, again after resolving symlinks (the
-    /// resolved path must still be under the resolved home). Length caps apply to characters
+    /// Paths are checked as text and again after resolving symlinks, through the deepest existing
+    /// ancestor for a path that does not exist yet (the resolved path must still be under the
+    /// resolved home). Length caps apply to characters
     /// and to UTF-8 bytes (4 per allowed character).
     ///
     /// - Throws: `ImportSanitizationError.invalidProfile` when the result still fails
@@ -238,14 +239,42 @@ private struct ProfileImportSanitizer {
     /// Absolute, no `.`/`..` components, and a strict descendant of the home directory
     /// (compared by path component, so `/Users/mehack` is not under `/Users/me`).
     ///
-    /// When the path exists, its symlink-resolved form must also be under the resolved home, so
-    /// a link inside home cannot point the tile outside it. A path that does not exist yet can
-    /// only be checked as text.
+    /// The symlink-resolved form must also be under the resolved home, so a link inside home
+    /// cannot point the tile outside it. A path that does not exist yet is resolved through its
+    /// deepest existing ancestor: `~/escape/not-yet` with `~/escape -> /etc` resolves to
+    /// `/etc/not-yet`.
     private func isUnderHome(_ path: String) -> Bool {
         guard Self.isStrictDescendant(path, of: home) else { return false }
-        guard FileManager.default.fileExists(atPath: path) else { return true }
-        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        guard let resolved = Self.resolvingExistingAncestor(of: path) else { return false }
         return Self.isStrictDescendant(resolved, of: resolvedHome)
+    }
+
+    private static let maxSymlinkHops = 32
+
+    /// Resolves symlinks in the deepest ancestor of `path` that exists (a dangling link counts as
+    /// existing and is followed) and appends the components that do not exist yet. Nil when the
+    /// links loop or are too deep.
+    private static func resolvingExistingAncestor(of path: String, hops: Int = 0) -> String? {
+        guard hops <= maxSymlinkHops else { return nil }
+        let fileManager = FileManager.default
+        var existing = path
+        var missing: [String] = []
+        // `attributesOfItem` does not follow a final link, so a dangling link is found.
+        while existing != "/", (try? fileManager.attributesOfItem(atPath: existing)) == nil {
+            missing.insert((existing as NSString).lastPathComponent, at: 0)
+            existing = (existing as NSString).deletingLastPathComponent
+        }
+        if let destination = try? fileManager.destinationOfSymbolicLink(atPath: existing) {
+            let target = destination.hasPrefix("/")
+                ? destination
+                : ((existing as NSString).deletingLastPathComponent as NSString).appendingPathComponent(destination)
+            let rest = missing.joined(separator: "/")
+            let joined = rest.isEmpty ? target : (target as NSString).appendingPathComponent(rest)
+            return resolvingExistingAncestor(of: (joined as NSString).standardizingPath, hops: hops + 1)
+        }
+        var resolved = URL(fileURLWithPath: existing).resolvingSymlinksInPath().path
+        for component in missing { resolved = (resolved as NSString).appendingPathComponent(component) }
+        return resolved
     }
 
     private static func isStrictDescendant(_ path: String, of root: String) -> Bool {

@@ -267,6 +267,44 @@ import Testing
         #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .disallowedPath)))
     }
 
+    @Test func pathBelowAnEscapingSymlinkIsRejectedEvenWhenItDoesNotExistYet() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sanitizer-\(UUID().uuidString)", isDirectory: true)
+        let homeDir = base.appendingPathComponent("home", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        let inside = homeDir.appendingPathComponent("real", isDirectory: true)
+        for dir in [homeDir, outside, inside] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: base) }
+        let escape = homeDir.appendingPathComponent("escape").path
+        let fine = homeDir.appendingPathComponent("fine").path
+        let dangling = homeDir.appendingPathComponent("dangling").path
+        try FileManager.default.createSymbolicLink(atPath: escape, withDestinationPath: outside.path)
+        try FileManager.default.createSymbolicLink(atPath: fine, withDestinationPath: inside.path)
+        try FileManager.default.createSymbolicLink(
+            atPath: dangling, withDestinationPath: outside.appendingPathComponent("gone").path
+        )
+
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.example.a", name: "A", path: escape + "/not-yet/A.app")),
+        ], others: [
+            .folder(FolderItem(path: escape + "/not-yet")),
+            .folder(FolderItem(path: dangling)),
+            .folder(FolderItem(path: fine + "/not-yet")),
+            .folder(FolderItem(path: homeDir.path + "/plain/other-new")),
+        ])
+        let result = try profile.sanitizedForImport(homeDirectory: homeDir)
+
+        #expect(result.profile.others == [
+            .folder(FolderItem(path: fine + "/not-yet")),
+            .folder(FolderItem(path: homeDir.path + "/plain/other-new")),
+        ])
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .disallowedPath)))
+        #expect(result.changes.contains(.droppedItem(.others, index: 1, reason: .disallowedPath)))
+        #expect(result.changes.contains(.clearedAppPath(.apps, index: 0)))
+    }
+
     @Test func byteLengthIsCappedAsWellAsCharacterCount() throws {
         // One grapheme, but over 1 KiB of UTF-8.
         let heavy = "e" + String(repeating: "\u{0301}", count: 600)
