@@ -106,6 +106,22 @@ private struct RefusingBackend: DockBackend {
     func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight { throw refusal }
 }
 
+/// Counts restarts and runs `hook` with the 1-based number of each, as the Dock does while it
+/// restarts.
+private actor HookedRestarter: DockRestarting {
+    private(set) var count = 0
+    private let hook: @Sendable (Int) async -> Void
+
+    init(_ hook: @escaping @Sendable (Int) async -> Void) {
+        self.hook = hook
+    }
+
+    func restart() async throws {
+        count += 1
+        await hook(count)
+    }
+}
+
 /// One-shot latch: `wait()` returns once `open()` has been called (before or after).
 private actor Gate {
     private var isOpen = false
@@ -819,6 +835,51 @@ struct ProfileApplierTests {
         try await expectRestoredFromTheOnlySnapshot(env)
         // The failed restart plus the one after the rollback.
         #expect(await env.restarter.count == 2)
+    }
+
+    @Test func dockThatDoesNotHoldTheWriteAfterRestartRollsBack() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let backend = env.backend
+        let restarter = HookedRestarter { number in
+            // The first restart loads the new preferences and the Dock drops a tile.
+            if number == 1 { try? await backend.apply([.remove(section: .apps, index: 1)]) }
+        }
+        let applier = ProfileApplier(
+            backend: backend,
+            snapshots: env.store,
+            restarter: restarter,
+            resolvePath: pathAsGiven
+        )
+
+        let error = await applyError { try await applier.apply(profile(apps: [calculator, notes])) }
+
+        guard case let .failedAndRolledBack(original)? = error else {
+            Issue.record("Expected failedAndRolledBack, got \(String(describing: error))")
+            return
+        }
+        guard case let DockBackendError.verificationFailed(expected, actual) = original else {
+            Issue.record("Expected verificationFailed, got \(original)")
+            return
+        }
+        #expect(expected == DockState(apps: [calculator, notes]))
+        #expect(actual == DockState(apps: [calculator]))
+        try await expectRestoredFromTheOnlySnapshot(env)
+        #expect(await restarter.count == 2)   // the apply, then the rollback
+    }
+
+    @Test func dockThatHoldsTheWriteAfterRestartIsApplied() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+
+        let result = try await env.applier().apply(profile(apps: [calculator]))
+
+        guard case .applied = result else {
+            Issue.record("Expected .applied, got \(result)")
+            return
+        }
+        // Plan, early check, late check, and the one after the restart.
+        #expect(await env.backend.readCount == 4)
     }
 
     @Test func failedRestoreReportsTheSnapshotAndDoesNotRestart() async throws {

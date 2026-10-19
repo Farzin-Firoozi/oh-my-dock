@@ -146,8 +146,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 /// 4. Snapshot the Dock, then re-read it. When it no longer equals the state the plan was
 ///    computed from (someone edited the Dock meanwhile), throw `ApplyError.dockChanged`: the
 ///    plan's indices would be stale, and the user confirmed a different plan.
-/// 5. `backend.apply`, then one `restarter.restart()`.
-/// 6. Any error from 5, or a cancellation seen after the backend finished: restore the snapshot,
+/// 5. `backend.apply`, then one `restarter.restart()`, then a re-read of the Dock: the restarted
+///    Dock must still hold what was written (it loads the preferences and may rewrite them).
+/// 6. Any error from 5 (including that re-read not matching), or a cancellation seen after the backend finished: restore the snapshot,
 ///    restart once, then throw `ApplyError.failedAndRolledBack` (or `.cancelled`). If the
 ///    restore or the restart fails: `ApplyError.rollbackFailed` with the snapshot id.
 ///
@@ -286,6 +287,7 @@ public actor ProfileApplier {
         let snapshot: Snapshot
         let plan: DockPlan
         let skipped: [SkippedItem]
+        let expected: DockState
         do {
             try validate(profile)
             let resolved = resolve(profile)
@@ -306,6 +308,8 @@ public actor ProfileApplier {
                 let accepted = await Self.confirmation(confirm, for: first)
                 if !accepted || Task.isCancelled { return .cancelled(rolledBack: false) }
             }
+
+            expected = try first.current.applying(first.plan.operations)
 
             // Cheap early exit that also avoids a pointless snapshot.
             if try await backend.read() != first.current { throw ApplyError.dockChanged }
@@ -339,6 +343,13 @@ public actor ProfileApplier {
             try await backend.apply(plan.operations)
             if !Task.isCancelled {
                 try await restarter.restart()
+            }
+            if !Task.isCancelled {
+                // The restarted Dock has loaded (and may have rewritten) what was written.
+                let actual = try await backend.read()
+                guard expected.matchesAfterWrite(actual) else {
+                    throw DockBackendError.verificationFailed(expected: expected, actual: actual)
+                }
             }
         } catch {
             failure = error
