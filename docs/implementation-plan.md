@@ -148,7 +148,7 @@ UI:
   - Tests/QA: save sheet, quit veto / deferral, sandboxed third-party app.
 - [ ] Confirmation sheet ("Will quit / Will open").
 - [ ] No permission needed in the tested scope (spike 0.6); release gate below covers the rest.
-- [ ] `DockutilScriptExporter`: profile → `.sh`. JSON import/export with schema validation.
+- [x] `DockutilScriptExporter`: profile → `.sh`. JSON import/export with schema validation.
 
 **Done when:** a switch can quit A's apps, open B's, and apply B's prefs. An exported script reproduces the Dock on a clean user account.
 

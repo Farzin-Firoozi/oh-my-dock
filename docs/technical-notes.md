@@ -63,6 +63,23 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 Tests syntax-check generated scripts with `sh -n` on stdin. They do not execute them.
 
+### JSON profile exchange
+
+`ProfileExchange` is the file format for a profile that leaves the app (export, import, and later the gallery). The app's own store remains a bare `Profile` document.
+
+```json
+{
+  "format" : "oh-my-dock-profile",
+  "profile" : { },
+  "version" : 1
+}
+```
+
+- `format` must be `oh-my-dock-profile`. `version` is the exchange document version and is currently `1`. The embedded `profile` is `Profile.jsonData()` (pretty-printed, sorted keys) and has its own `schemaVersion`.
+- Import rejects a document larger than 1 MiB (1,048,576 bytes) before parsing. It rejects malformed JSON, a missing `format` / `version` / `profile`, any key other than those three, and any unknown key inside the profile. A `version` other than `1` (older or newer) fails as an unsupported version, even when the document also has unknown keys, so a newer file reports its version.
+- Import always runs `Profile.sanitizedForImport()` and returns that profile plus the sanitizer's change list. The id is new. Quit scope is forced to `none`, force-quit is cleared, and launch-on-switch is cleared. URLs, paths, unknown tiles, and over-long strings follow the gallery rules in [profile-gallery.md](profile-gallery.md).
+- Export does not sanitize. A file is checked on the way in, including one this app just wrote.
+
 ## Native Dock limits
 
 - **Every change restarts the Dock** (`killall Dock`), so icons flash for about a second. Always batch with `--no-restart` and restart once.
@@ -88,7 +105,7 @@ Tests syntax-check generated scripts with `sh -n` on stdin. They do not execute 
 - **Quit permission**: none needed in the tested scope. `NSRunningApplication.terminate()` works with no Accessibility or Automation permission on macOS 27.0.1, unmanaged machine (CLI, ad-hoc app, and ad-hoc hardened-runtime app tested). Untested: macOS 14/15, notarized Developer ID build, MDM/PPPC Macs, save sheets / quit veto, sandboxed targets, `forceTerminate()`. Always handle `terminate() == false` and timeouts; never force quit automatically. No first-use prompt. Do **not** add `NSAppleEventsUsageDescription` or the apple-events entitlement, and never hand-build quit Apple Events / AppleScript (those need Automation consent). See [spike 0.6](spikes/0.6-terminate-permission.md).
 - **AppSwitcher** (`Switching/`): protocol-based (`RunningAppsProviding`, `AppLauncher`, `SwitchClock`) so tests use fakes and never touch real processes. Graceful `terminate()` only, sequential per-app wait with an injectable timeout (default 5 s), stragglers reported and never force quit by `execute`; `forceQuit` is a separate call gated by `SwitchingOptions.offerForceQuit` and `forceTerminate()` is unverified. Cooperative cancellation without rollback; `SwitchQueue` serializes switches. Run it on the main actor: `NSRunningApplication` state only updates while the run loop runs. See [profile switching](profile-switching.md).
 - **Lock Dock to display**: shelved for the v0.4+ research bucket. Ship without it.
-- **Profile format**: **JSON** (native `Codable`, no dependency) for storage and import/export. From v0.1, every app item stores `bundleId` (plus optional `brewCask` / `appStoreId`), not just a path. The gallery depends on this.
+- **Profile format**: **JSON** (native `Codable`, no dependency) for storage and import/export. From v0.1, every app item stores `bundleId` (plus optional `brewCask` / `appStoreId`), not just a path. The gallery depends on this. A profile shared outside the app is a `ProfileExchange` envelope (`format`, `version`, `profile`); see Export formats.
 
 - **Dock backend**: reads via CFPreferences / `PropertyListSerialization`; writes via **bundled `dockutil`** inside the app. Both behind a `DockBackend` protocol.
 
