@@ -41,6 +41,41 @@ import Testing
         }
     }
 
+    @Test func rejectsTheSameAppTwiceInASection() {
+        let app = DockItem.app(AppRef(bundleId: "a.b", name: "B", path: "/Applications/B.app"))
+        #expect(throws: ProfileValidationError.duplicateLabel(.apps, index: 2, label: "B")) {
+            try profile(apps: [app, .spacer(.normal), app]).validate()
+        }
+    }
+
+    @Test func rejectsDifferentTilesWithTheSameLabel() {
+        let folder = DockItem.folder(FolderItem(path: "/Users/me/Docs"))
+        let file = DockItem.file(FileItem(path: "/Users/me/Other/Docs"))
+        #expect(throws: ProfileValidationError.duplicateLabel(.others, index: 1, label: "Docs")) {
+            try profile(others: [folder, file]).validate()
+        }
+        let first = DockItem.url(URLItem(url: URL(string: "https://a.example")!, label: "Site"))
+        let second = DockItem.url(URLItem(url: URL(string: "https://b.example")!, label: "Site"))
+        #expect(throws: ProfileValidationError.duplicateLabel(.others, index: 1, label: "Site")) {
+            try profile(others: [first, second]).validate()
+        }
+    }
+
+    @Test func appLabelComesFromThePathNotTheName() {
+        let one = DockItem.app(AppRef(bundleId: "a.one", name: "Same", path: "/Applications/One.app"))
+        let two = DockItem.app(AppRef(bundleId: "a.two", name: "Same", path: "/Applications/Two.app"))
+        #expect(throws: Never.self) { try profile(apps: [one, two]).validate() }
+    }
+
+    @Test func spacersAndSameLabelsInDifferentSectionsAreFine() throws {
+        let app = DockItem.app(AppRef(bundleId: "a.b", name: "Docs", path: "/Applications/Docs.app"))
+        let folder = DockItem.folder(FolderItem(path: "/Users/me/Docs"))
+        try profile(
+            apps: [.spacer(.normal), .spacer(.normal), .spacer(.small), app],
+            others: [folder]
+        ).validate()
+    }
+
     @Test(arguments: ["~/Downloads", "Downloads", "./Downloads", "/Users/me/../other", "/Users/./me", ""])
     func rejectsNonAbsoluteFolderPaths(_ path: String) {
         #expect(throws: ProfileValidationError.pathNotAbsolute(.others, index: 0, path: path)) {

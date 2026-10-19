@@ -96,6 +96,9 @@ public enum ProfileValidationError: Error, Hashable, Sendable {
     case pathNotAbsolute(DockSection, index: Int, path: String)
     case unsupportedURLScheme(DockSection, index: Int, url: String)
     case invalidPrefs(DockPrefsValidationError)
+    /// Two tiles of one section get the same label from dockutil, which refuses to add the second.
+    /// `index` is the later tile.
+    case duplicateLabel(DockSection, index: Int, label: String)
 }
 
 extension Profile {
@@ -107,8 +110,16 @@ extension Profile {
             throw .nameTooLong(length: name.count, maximum: Self.maxNameLength)
         }
         for section in DockSection.allCases {
+            var labels: Set<String> = []
             for (index, item) in items(in: section).enumerated() {
                 try Self.validate(item, in: section, at: index)
+                // dockutil refuses to add a tile whose computed label is already used in the
+                // section (spacers are never stored, so they never collide).
+                guard !item.isSpacer else { continue }
+                let label = DockutilPlanner.computedLabel(of: item)
+                if !label.isEmpty, !labels.insert(label).inserted {
+                    throw .duplicateLabel(section, index: index, label: label)
+                }
             }
         }
         do {
