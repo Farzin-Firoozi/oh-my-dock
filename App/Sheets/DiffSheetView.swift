@@ -146,6 +146,42 @@ public struct DiffSheetView: View {
                     }
                 }
 
+                if !model.prefs.isEmpty {
+                    Section {
+                        ForEach(model.prefs) { row in
+                            ChangeRowView(
+                                symbol: "slider.horizontal.3",
+                                symbolColor: .purple,
+                                title: row.name,
+                                subtitle: nil,
+                                badge: "\(row.current) → \(row.target)"
+                            )
+                        }
+                    } header: {
+                        Label("Dock preferences (\(model.prefs.count))", systemImage: "gearshape.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.purple)
+                    }
+                }
+
+                if !model.apps.isEmpty {
+                    Section {
+                        ForEach(model.apps) { row in
+                            ChangeRowView(
+                                symbol: row.action == .quit ? "xmark.app.fill" : "arrow.up.forward.app.fill",
+                                symbolColor: row.action == .quit ? .red : .green,
+                                title: row.name,
+                                subtitle: row.action == .quit ? "Asked to quit after the Dock is updated; Undo will not reopen it" : nil,
+                                badge: row.action == .quit ? "Will quit" : "Will open"
+                            )
+                        }
+                    } header: {
+                        Label("Apps (\(model.apps.count))", systemImage: "app.badge.fill")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                }
+
                 if !model.skipped.isEmpty {
                     Section {
                         ForEach(model.skipped) { row in

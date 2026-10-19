@@ -76,7 +76,7 @@ struct HistoryWindow: View {
             case let .restore(snapshot):
                 Alert(
                     title: Text("Restore this snapshot?"),
-                    message: Text("Your current Dock will be replaced with the snapshot from \(snapshot.createdAt.formatted(date: .abbreviated, time: .shortened))."),
+                    message: Text("Your current Dock and its preferences will be replaced with the snapshot from \(snapshot.createdAt.formatted(date: .abbreviated, time: .shortened)). Apps that were quit since then are not reopened."),
                     primaryButton: .default(Text("Restore")) { model.confirm(action) },
                     secondaryButton: .cancel { model.cancelPendingAction() }
                 )

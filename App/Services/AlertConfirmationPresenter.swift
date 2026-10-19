@@ -44,15 +44,29 @@ final class AlertConfirmationPresenter: ConfirmationPresenting {
             )
             super.init()
 
-            let title = NSTextField(labelWithString: "Some apps are missing")
+            let title = NSTextField(labelWithString: confirmation.skippedApps.isEmpty ? "Apps will be quit" : "Some apps are missing")
             title.font = .boldSystemFont(ofSize: NSFont.systemFontSize + 2)
-            var text = "“\(confirmation.profileName)” can still be applied without: "
-                + confirmation.skippedApps.joined(separator: ", ") + "."
+            var text = ""
+            if !confirmation.skippedApps.isEmpty {
+                text += "“\(confirmation.profileName)” can still be applied without: "
+                    + confirmation.skippedApps.joined(separator: ", ") + "."
+            }
+            if !confirmation.quitApps.isEmpty {
+                text += (text.isEmpty ? "" : " ") + "Will quit: " + confirmation.quitApps.joined(separator: ", ")
+                    + ". Apps with unsaved work may ask to save; Undo will not reopen them."
+            }
+            if !confirmation.launchApps.isEmpty {
+                text += (text.isEmpty ? "" : " ") + "Will open: " + confirmation.launchApps.joined(separator: ", ") + "."
+            }
             if confirmation.clearsRecentApps { text += " This also clears the Dock's recent apps." }
             let body = NSTextField(wrappingLabelWithString: text)
             body.preferredMaxLayoutWidth = 380
 
-            let apply = NSButton(title: "Apply Anyway", target: self, action: #selector(accept))
+            let apply = NSButton(
+                title: confirmation.skippedApps.isEmpty ? "Apply" : "Apply Anyway",
+                target: self,
+                action: #selector(accept)
+            )
             apply.keyEquivalent = "\r"
             let cancel = NSButton(title: "Cancel", target: self, action: #selector(decline))
             cancel.keyEquivalent = "\u{1b}"

@@ -39,9 +39,16 @@ private actor FakeApplier: ProfileApplying {
     typealias Script = @Sendable (Profile, (@Sendable (ApplyPreview) async -> Bool)?) async throws -> ApplyResult
 
     private(set) var applied: [Profile] = []
+    private(set) var triggers: [ApplyTrigger] = []
+    private(set) var sources: [String?] = []
     private var script: Script
 
     init(_ script: @escaping Script) { self.script = script }
+
+    func record(trigger: ApplyTrigger, source: String?) {
+        triggers.append(trigger)
+        sources.append(source)
+    }
 
     func apply(
         _ profile: Profile,
@@ -49,6 +56,18 @@ private actor FakeApplier: ProfileApplying {
     ) async throws -> ApplyResult {
         applied.append(profile)
         return try await script(profile, confirm)
+    }
+}
+
+extension FakeApplier {
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult {
+        record(trigger: trigger, source: source?.name)
+        return try await apply(profile, confirm: confirm)
     }
 }
 
@@ -428,6 +447,61 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
         #expect(model.confirmation == nil)
         #expect(model.banner?.message.hasPrefix("Applied “Work”") == true)
+    }
+
+    private static func quittingPreview(_ name: String) -> ApplyPreview {
+        let slack = RunningAppInfo(processIdentifier: 7, bundleId: "com.example.slack", name: "Slack")
+        return ApplyPreview(
+            profileName: name,
+            current: DockState(),
+            target: DockState(),
+            plan: DockPlan(operations: [], summary: ""),
+            skipped: [],
+            switchPlan: SwitchPlan(
+                scope: .previousProfileApps,
+                willQuit: [slack],
+                willLaunch: [LaunchRequest(bundleId: "com.example.figma", name: "Figma")]
+            )
+        )
+    }
+
+    @Test func aSwitchThatQuitsAppsAsksForConfirmationAndReportsWhatHappened() async {
+        let applier = FakeApplier { _, confirm in
+            let accepted = await confirm?(Self.quittingPreview("Work")) ?? false
+            guard accepted else { return .cancelled(rolledBack: false) }
+            let slack = RunningAppInfo(processIdentifier: 7, bundleId: "com.example.slack", name: "Slack")
+            return .applied(ApplyReport(
+                plan: DockPlan(operations: [], summary: ""), snapshotID: UUID(), skipped: [],
+                clearsRecentApps: false, restarted: true,
+                switchOutcome: SwitchOutcome(quits: [QuitResult(app: slack, status: .quit)])
+            ))
+        }
+        let model = makeModel(applier: applier)
+
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmation != nil })
+        #expect(model.confirmation?.quitApps == ["Slack"])
+        #expect(model.confirmation?.launchApps == ["Figma"])
+
+        model.resolveConfirmation(true)
+        #expect(await eventually { model.activity == nil })
+        let message = model.banner?.message ?? ""
+        #expect(message.hasPrefix("Applied “Work”."))
+        #expect(message.contains("Quit 1"))
+        #expect(message.contains("quit apps are not reopened"))
+    }
+
+    @Test func aHotkeyApplyIsAnAutomaticTriggerAndAPopoverApplyIsNot() async {
+        let work = profile("Work")
+        let applier = FakeApplier { _, _ in .applied(report()) }
+        let model = makeModel(library: FakeLibrary([work]), applier: applier)
+
+        model.apply(work)
+        #expect(await eventually { model.banner != nil })
+        model.dismissBanner()
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.banner != nil })
+        #expect(await applier.triggers == [.user, .automatic])
     }
 
     private static let askingApplier = FakeApplier { _, confirm in

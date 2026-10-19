@@ -29,6 +29,11 @@ public enum QuitStatus: Hashable, Sendable {
 public struct QuitResult: Hashable, Sendable {
     public let app: RunningAppInfo
     public let status: QuitStatus
+
+    public init(app: RunningAppInfo, status: QuitStatus) {
+        self.app = app
+        self.status = status
+    }
 }
 
 public enum LaunchStatus: Hashable, Sendable {
@@ -42,6 +47,11 @@ public enum LaunchStatus: Hashable, Sendable {
 public struct LaunchResult: Hashable, Sendable {
     public let request: LaunchRequest
     public let status: LaunchStatus
+
+    public init(request: LaunchRequest, status: LaunchStatus) {
+        self.request = request
+        self.status = status
+    }
 }
 
 /// Per-app result of a switch.

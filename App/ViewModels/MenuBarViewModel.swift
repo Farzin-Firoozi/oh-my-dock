@@ -19,23 +19,33 @@ final class MenuBarViewModel {
         let skippedApps: [String]
         let clearsRecentApps: Bool
         let preview: ApplyPreview?
+        /// Running apps the switch would ask to quit.
+        let quitApps: [String]
+        /// Apps the switch would open.
+        let launchApps: [String]
 
         init(
             profileName: String,
             skippedApps: [String],
             clearsRecentApps: Bool,
-            preview: ApplyPreview? = nil
+            preview: ApplyPreview? = nil,
+            quitApps: [String] = [],
+            launchApps: [String] = []
         ) {
             self.profileName = profileName
             self.skippedApps = skippedApps
             self.clearsRecentApps = clearsRecentApps
             self.preview = preview
+            self.quitApps = quitApps
+            self.launchApps = launchApps
         }
 
         static func == (lhs: Confirmation, rhs: Confirmation) -> Bool {
             lhs.profileName == rhs.profileName &&
                 lhs.skippedApps == rhs.skippedApps &&
                 lhs.clearsRecentApps == rhs.clearsRecentApps &&
+                lhs.quitApps == rhs.quitApps &&
+                lhs.launchApps == rhs.launchApps &&
                 (lhs.preview == nil || rhs.preview == nil || lhs.preview == rhs.preview)
         }
     }
@@ -210,8 +220,12 @@ final class MenuBarViewModel {
         defer { activity = nil }
 
         do {
+            // The profile on the Dock now scopes which apps may be quit (the previous profile's).
+            let previous = profiles.first { $0.id == (activeProfileID ?? lastAppliedID) && $0.id != profile.id }
+            // A hotkey is an automatic source: it quits nothing unless the preview is confirmed.
+            let trigger: ApplyTrigger = source == .popover ? .user : .automatic
             let result = try await gate.run("Applying “\(profile.name)”") {
-                try await applier.apply(profile) { [weak self] preview in
+                try await applier.apply(profile, from: previous, trigger: trigger) { [weak self] preview in
                     guard let self else { return false }
                     return await self.requestConfirmation(for: preview)
                 }
@@ -219,7 +233,10 @@ final class MenuBarViewModel {
             switch result {
             case let .applied(report):
                 lastAppliedID = profile.id
-                show(.success, appliedMessage(profile.name, skipped: report.skipped))
+                show(.success, appliedMessage(profile.name, report: report))
+            case let .appsOnly(outcome):
+                lastAppliedID = profile.id
+                show(.success, "“\(profile.name)” is already on the Dock. " + appsMessage(outcome))
             case .noChanges:
                 lastAppliedID = profile.id
                 show(.success, "“\(profile.name)” is already on the Dock.")
@@ -235,8 +252,20 @@ final class MenuBarViewModel {
         await refresh()
     }
 
-    private func appliedMessage(_ name: String, skipped: [SkippedItem]) -> String {
-        skipped.isEmpty ? "Applied “\(name)”." : "Applied “\(name)”, without \(skipped.count) missing app(s)."
+    private func appliedMessage(_ name: String, report: ApplyReport) -> String {
+        var message = report.skipped.isEmpty
+            ? "Applied “\(name)”."
+            : "Applied “\(name)”, without \(report.skipped.count) missing app(s)."
+        if let outcome = report.switchOutcome { message += " " + appsMessage(outcome) }
+        return message
+    }
+
+    /// What the app phase did. The Dock change stands even when it was cut short, and Undo does
+    /// not reopen what was quit.
+    private func appsMessage(_ outcome: SwitchOutcome) -> String {
+        var message = outcome.summary + "."
+        if outcome.quitCount > 0 { message += " Undo restores the Dock only; quit apps are not reopened." }
+        return message
     }
 
     // MARK: Confirmation
@@ -244,7 +273,7 @@ final class MenuBarViewModel {
     /// The applier's `confirm` hook. Profiles that lose nothing apply without asking; otherwise the
     /// popover shows `confirmation` until `resolveConfirmation(_:)` (or a cancel) answers it.
     private func requestConfirmation(for preview: ApplyPreview) async -> Bool {
-        guard !preview.skipped.isEmpty else { return true }
+        guard preview.confirmationRequired else { return true }
         resolveConfirmation(false) // at most one question at a time
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
@@ -255,7 +284,9 @@ final class MenuBarViewModel {
                     profileName: preview.profileName,
                     skippedApps: preview.skipped.map { $0.app.name.isEmpty ? $0.app.bundleId : $0.app.name },
                     clearsRecentApps: preview.clearsRecentApps,
-                    preview: preview
+                    preview: preview,
+                    quitApps: preview.willQuitApps.map(\.name),
+                    launchApps: (preview.switchPlan?.willLaunch ?? []).map(\.name)
                 )
                 confirmation = question
                 // Nobody may be looking at the popover (a hotkey apply with the menu closed), so
@@ -324,7 +355,7 @@ final class MenuBarViewModel {
         do {
             try await gate.run("Restoring the previous Dock") { try await undoer.undo(expecting: target.id) }
             lastAppliedID = nil
-            show(.success, "Restored the Dock from before the last change.")
+            show(.success, "Restored the Dock from before the last change. Apps that were quit are not reopened.")
         } catch {
             show(.failure, describe(error))
         }

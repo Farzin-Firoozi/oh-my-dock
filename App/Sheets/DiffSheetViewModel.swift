@@ -152,6 +152,22 @@ public final class DiffSheetViewModel {
         }
     }
 
+    /// One Dock preference key the profile would change.
+    public struct PrefRow: Identifiable, Equatable, Sendable {
+        public let id: String
+        public let name: String
+        public let current: String
+        public let target: String
+    }
+
+    /// One app the switch would quit or open.
+    public struct AppRow: Identifiable, Equatable, Sendable {
+        public enum Action: Equatable, Sendable { case quit, open }
+        public let id: String
+        public let name: String
+        public let action: Action
+    }
+
     // MARK: - Properties
 
     public let profileName: String
@@ -162,9 +178,14 @@ public final class DiffSheetViewModel {
     public let moves: [MoveRow]
     public let skipped: [SkippedItemRow]
     public let canApply: Bool
+    /// "Dock preferences" section: keys whose value would change. Empty when the profile sets none.
+    public let prefs: [PrefRow]
+    /// "Apps" section: running apps to quit and apps to open.
+    public let apps: [AppRow]
 
     public var hasChanges: Bool {
         !additions.isEmpty || !removals.isEmpty || !moves.isEmpty || !skipped.isEmpty
+            || !prefs.isEmpty || !apps.isEmpty
     }
 
     public var totalChangesCount: Int {
@@ -378,6 +399,48 @@ public final class DiffSheetViewModel {
         self.additions = adds
         self.removals = rems
         self.moves = mvs
+
+        self.prefs = (preview.prefsDiff?.entries ?? []).map { entry in
+            PrefRow(
+                id: "pref-\(entry.key.rawValue)",
+                name: Self.title(of: entry.key),
+                current: entry.current.map(Self.text(of:)) ?? "Default",
+                target: Self.text(of: entry.target)
+            )
+        }
+        let plan = preview.switchPlan
+        self.apps = (plan?.willQuit ?? []).map {
+            AppRow(id: "quit-\($0.processIdentifier)", name: $0.name, action: .quit)
+        } + (plan?.willLaunch ?? []).map {
+            AppRow(id: "open-\($0.bundleId)", name: $0.name, action: .open)
+        }
+    }
+
+    private static func title(of key: DockPrefs.Key) -> String {
+        switch key {
+        case .tileSize: "Icon size"
+        case .magnification: "Magnification"
+        case .largeSize: "Magnified size"
+        case .orientation: "Position on screen"
+        case .autohide: "Automatically hide"
+        case .autohideDelay: "Hide delay"
+        case .autohideTimeModifier: "Hide animation time"
+        case .showRecents: "Show recent apps"
+        case .staticOnly: "Show only open apps"
+        case .minimizeEffect: "Minimize effect"
+        case .minimizeToApplication: "Minimize into app icon"
+        case .showProcessIndicators: "Open-app indicators"
+        case .launchAnimation: "Opening animation"
+        case .scrollToOpen: "Scroll to open"
+        }
+    }
+
+    private static func text(of value: DockPrefs.Value) -> String {
+        switch value {
+        case let .bool(flag): flag ? "On" : "Off"
+        case let .double(number): number.formatted(.number.precision(.fractionLength(0...2)))
+        case let .string(string): string.capitalized
+        }
     }
 
     private static func diffStates(

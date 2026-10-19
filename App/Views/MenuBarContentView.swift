@@ -121,6 +121,7 @@ struct MenuBarContentView: View {
                 detail: model.undoTarget.map { $0.createdAt.formatted(.relative(presentation: .named)) },
                 isDisabled: !model.canUndo
             ) { model.undoLastChange() }
+            .help("Restores the Dock and its preferences. Apps that were quit are not reopened.")
             ActionRow("Open editor…", systemImage: "slider.horizontal.3") {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "editor")
@@ -352,12 +353,27 @@ private struct ConfirmationCard: View {
     var body: some View {
         Card {
             VStack(alignment: .leading, spacing: 8) {
-                Label("Some apps are missing", systemImage: "exclamationmark.triangle.fill")
+                Label(
+                    confirmation.skippedApps.isEmpty ? "Apps will be quit" : "Some apps are missing",
+                    systemImage: "exclamationmark.triangle.fill"
+                )
                     .font(.callout.weight(.semibold))
                     .foregroundStyle(.orange)
-                Text("“\(confirmation.profileName)” can still be applied without: \(confirmation.skippedApps.joined(separator: ", ")).")
-                    .font(.callout)
-                    .fixedSize(horizontal: false, vertical: true)
+                if !confirmation.skippedApps.isEmpty {
+                    Text("“\(confirmation.profileName)” can still be applied without: \(confirmation.skippedApps.joined(separator: ", ")).")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !confirmation.quitApps.isEmpty {
+                    Text("Will quit: \(confirmation.quitApps.joined(separator: ", ")). Apps with unsaved work may ask to save; Undo will not reopen them.")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                if !confirmation.launchApps.isEmpty {
+                    Text("Will open: \(confirmation.launchApps.joined(separator: ", ")).")
+                        .font(.callout)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
                 if confirmation.clearsRecentApps {
                     Text("This also clears the Dock's recent apps.")
                         .font(.caption)
@@ -371,7 +387,7 @@ private struct ConfirmationCard: View {
                         Button("Review Changes…") { onReviewDiff() }
                             .controlSize(.small)
                     }
-                    Button("Apply Anyway") { answer(true) }
+                    Button(confirmation.skippedApps.isEmpty ? "Apply" : "Apply Anyway") { answer(true) }
                         .keyboardShortcut(.defaultAction)
                 }
             }

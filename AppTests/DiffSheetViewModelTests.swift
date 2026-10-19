@@ -41,6 +41,44 @@ import Testing
         )
     }
 
+    // MARK: - Preferences and apps
+
+    @Test func prefsAndAppsGetTheirOwnSections() {
+        let slack = RunningAppInfo(processIdentifier: 7, bundleId: "com.example.slack", name: "Slack")
+        let preview = ApplyPreview(
+            profileName: "Work",
+            current: DockState(),
+            target: DockState(),
+            plan: DockPlan(operations: [], summary: ""),
+            skipped: [],
+            prefsDiff: PrefsDiff(entries: [
+                .init(key: .tileSize, current: .double(48), target: .double(64)),
+                .init(key: .autohide, current: nil, target: .bool(true)),
+            ]),
+            switchPlan: SwitchPlan(
+                scope: .previousProfileApps,
+                willQuit: [slack],
+                willLaunch: [LaunchRequest(bundleId: "com.example.figma", name: "Figma")]
+            )
+        )
+        let model = DiffSheetViewModel(preview: preview)
+
+        #expect(model.prefs.map(\.name) == ["Icon size", "Automatically hide"])
+        #expect(model.prefs.map(\.target) == ["64", "On"])
+        #expect(model.prefs.first?.current == "48")
+        #expect(model.prefs.last?.current == "Default")
+        #expect(model.apps.map(\.name) == ["Slack", "Figma"])
+        #expect(model.apps.map(\.action) == [.quit, .open])
+        #expect(model.hasChanges)
+        #expect(model.canApply)
+    }
+
+    @Test func noPrefsAndNoSwitcherMeansNoExtraSections() {
+        let model = DiffSheetViewModel(preview: makePreview())
+        #expect(model.prefs.isEmpty)
+        #expect(model.apps.isEmpty)
+    }
+
     // MARK: - Additions
 
     @Test func additionsAreMappedFromInsertOperations() {

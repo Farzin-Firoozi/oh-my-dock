@@ -25,14 +25,32 @@ enum AppEnvironment {
         let snapshots = SnapshotStore()
         let restarter = LiveDockRestarter()
         let backend = makeLiveBackend()
-        let applier = ProfileApplier(backend: backend, snapshots: snapshots, restarter: restarter)
+        let prefsWriter = DockPrefsWriter()
+        // Apps are quit and launched only through this switcher, after the Dock change is verified.
+        let appSwitcher = AppSwitcher(
+            provider: LiveRunningApps(),
+            launcher: LiveAppLauncher(),
+            neverQuit: .live()
+        )
+        let applier = ProfileApplier(
+            backend: backend,
+            snapshots: snapshots,
+            restarter: restarter,
+            prefsWriter: prefsWriter,
+            appSwitcher: appSwitcher
+        )
         let bootstrapper = FirstLaunchBootstrapper(profileStore: profiles, snapshotStore: snapshots)
         let hotkeys = HotkeyService(registrar: KeyboardShortcutsRegistrar())
         let menuBar = MenuBarViewModel(
             library: profiles,
             dock: backend,
             applier: applier,
-            undoer: SnapshotUndoService(snapshots: snapshots, restarter: restarter, record: FileSpentUndoRecord()),
+            undoer: SnapshotUndoService(
+                snapshots: snapshots,
+                restarter: restarter,
+                record: FileSpentUndoRecord(),
+                prefsWriter: prefsWriter
+            ),
             bootstrap: { _ = try await bootstrapper.runIfNeeded() },
             gate: gate,
             activeRecord: FileActiveProfileRecord(),
@@ -46,7 +64,7 @@ enum AppEnvironment {
             hotkeys: hotkeys
         )
         let history = HistoryViewModel(
-            history: SnapshotHistoryService(snapshots: snapshots, restarter: restarter),
+            history: SnapshotHistoryService(snapshots: snapshots, restarter: restarter, prefsWriter: prefsWriter),
             gate: gate,
             changes: changes
         )

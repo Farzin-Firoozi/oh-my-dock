@@ -23,6 +23,25 @@ protocol ProfileApplying: Sendable {
         _ profile: Profile,
         confirm: (@Sendable (ApplyPreview) async -> Bool)?
     ) async throws -> ApplyResult
+    /// `source` is the profile being switched away from (it scopes which apps get quit);
+    /// `trigger` tells a click from an automatic source such as a hotkey.
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult
+}
+
+extension ProfileApplying {
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult {
+        try await apply(profile, confirm: confirm)
+    }
 }
 
 extension ProfileApplier: ProfileApplying {}
@@ -109,16 +128,21 @@ actor SnapshotUndoService: DockUndoing {
     private let snapshots: SnapshotStore
     private let restarter: any DockRestarting
     private let record: any SpentUndoRecording
+    private let prefsWriter: (any DockPrefsWriting)?
     private var spent: Set<UUID>
 
+    /// `prefsWriter` puts the Dock preferences a snapshot recorded back along with the tiles.
+    /// Undo never reopens apps that a switch quit.
     init(
         snapshots: SnapshotStore,
         restarter: any DockRestarting,
-        record: any SpentUndoRecording = InMemorySpentUndoRecord()
+        record: any SpentUndoRecording = InMemorySpentUndoRecord(),
+        prefsWriter: (any DockPrefsWriting)? = nil
     ) {
         self.snapshots = snapshots
         self.restarter = restarter
         self.record = record
+        self.prefsWriter = prefsWriter
         spent = record.load()
     }
 
@@ -130,7 +154,7 @@ actor SnapshotUndoService: DockUndoing {
     func undo(expecting id: UUID?) async throws {
         guard let target = await undoTarget() else { throw UndoError.nothingToUndo }
         if let id, id != target.id { throw UndoError.targetChanged }
-        try await snapshots.restore(id: target.id)
+        try await snapshots.restore(id: target.id, prefsWriter: prefsWriter)
         // The Dock now holds the restored state; whatever happens next, this undo is used up.
         // Ids of snapshots that no longer exist are dropped so the file doesn't grow forever.
         let existing = Set(await snapshots.list().snapshots.map(\.id))
@@ -169,13 +193,14 @@ enum SnapshotHistoryError: Error, LocalizedError {
 struct SnapshotHistoryService: SnapshotHistoryManaging {
     let snapshots: SnapshotStore
     let restarter: any DockRestarting
+    var prefsWriter: (any DockPrefsWriting)?
 
     func list() async -> [Snapshot] {
         await snapshots.list().snapshots
     }
 
     func restore(id: UUID) async throws {
-        try await snapshots.restore(id: id)
+        try await snapshots.restore(id: id, prefsWriter: prefsWriter)
         do {
             try await restarter.restart()
         } catch {
