@@ -24,12 +24,22 @@ Write rules (from [spike 0.4](spikes/0.4-dockutil-temp-plist.md) source review o
 - **Verify by re-reading.** After every write, re-read the Dock and compare to the expected state. Never trust dockutil's exit code: it exits 0 even when `defaults import` failed (e.g. read-only plist).
 - **Never `--remove spacer-tiles`.** It crashes (SIGTRAP) with several spacers and saves nothing. dockutil 3.1.3 cannot remove a spacer by position: spacers have no label or URL, so `--remove ""` fails. Removing spacers needs one of two paths:
   - **Direct plist edit**: delete the tile from `persistent-apps` / `persistent-others` through CFPreferences on the live Dock, then re-read the Dock to verify, and restart the Dock once.
-  - **Full rewrite**: `--remove all`, then re-add every tile, all with `--no-restart`, with one Dock restart at the end.
+  - **Full rewrite**: `--remove all`, then re-add every tile, all with `--no-restart`, with one Dock restart at the end. `--remove all` also clears `recent-apps`; `DockutilBackend.preflight` reports this (`clearsRecentApps`).
 - **Canonicalize plist paths** with `resolvingSymlinksInPath().standardized`. dockutil's live-plist check is a lowercased string compare, so an aliasing path (symlink, `..`, `//`) would be treated as non-live and `defaults import` into the live domain without a restart. Refuse any path that resolves to the live plist except through the explicit live-write code path.
 - **Always pass absolute item paths.** `~` expands relative to the plist path (`--add '~/Downloads' "$P"` adds `$P/Downloads`).
+- **Option values starting with `-` need the `--label=` form.** `--label -x` fails with "Missing value". Empty labels are dropped, never passed as `--label ""` (it matches every URL tile with an empty path).
+- **Duplicate-label add is refused.** `Dock.add` refuses a tile whose computed label is already the first match (apps, then recents, then others) in the destination section. `Profile` validation throws `duplicateLabel` before any write. Spacers are never stored, so they never collide.
+- **Spacer sentinel label** `oh-my-dock-spacer`: every spacer `--add` passes it. Without `--label`, dockutil uses the working directory's last component, which can collide with a real tile.
+- **Folders: `--view`, `--display`, `--sort` always passed explicitly**, even at defaults, so dockutil's defaults never decide a written folder's options.
 - **Sudo hop.** Non-live writes run `/usr/bin/sudo -u #<owner uid> /usr/bin/defaults import`. Same-user sudo needs no password, but an MDM-locked sudoers could break it. dockutil always prints "not running as the user of this Dock nor root" in this mode.
 
 Preferences are written via `defaults write com.apple.dock <key>` (or `CFPreferencesSetAppValue` + `CFPreferencesAppSynchronize`).
+
+## Apply and restore
+
+- **Apply flow** (`ProfileApplier`, in place now): snapshot, then re-read the Dock. Refuse if it no longer matches the state the plan was built from (`dockChanged`; indices would be stale). Backend apply (`--no-restart`, re-read verifies). One Dock restart. Re-read after restart. Any failure, or a re-read mismatch: restore the snapshot, restart once, report. If the restore also fails: `rollbackFailed` with the snapshot id.
+- **Restore is a true replace.** `defaults import com.apple.dock <file>` replaces the whole domain. The restored plist is then read back and must equal the snapshot, else `restoreVerificationFailed`.
+- **Not in the flow yet:** `DockPrefsWriter` and `AppSwitcher` (M2). Until then apply touches tiles only.
 
 ## Native Dock limits
 

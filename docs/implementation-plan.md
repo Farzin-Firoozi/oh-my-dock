@@ -28,7 +28,7 @@ oh-my-dock/
 │       │   ├── Model/          # Profile, DockItem, DockPrefs, Trigger (Codable)
 │       │   ├── Dock/           # DockBackend protocol, DockutilBackend, DockPrefsWriter, DockRestarter
 │       │   ├── Store/          # ProfileStore (JSON), SnapshotStore (backups/history)
-│       │   ├── Apply/          # DiffEngine, ApplyPlan, ProfileApplier (orchestrates)
+│       │   ├── Apply/          # DiffEngine, DockPlan, ProfileApplier (orchestrates)
 │       │   ├── Apps/           # AppResolver (bundleId→path), AppSwitcher (quit/launch)
 │       │   ├── Triggers/       # TriggerEngine + sources (Focus, Display, WiFi, Schedule, Frontmost)
 │       │   └── Export/         # DockutilScriptExporter, JSON import/export, schema validation
@@ -121,13 +121,13 @@ Each milestone ends with a working, shippable build.
 ### M1 (v0.1): Profiles, editor, backup
 
 Core:
-- [ ] Models + JSON `ProfileStore` (atomic writes, schemaVersion).
-- [ ] Read Dock via CFPreferences / PropertyListSerialization (see spike 0.5): parse into `[DockItem]`. Resolve `bundleId` via `Bundle(url:)`.
-- [ ] `DiffEngine`: current → target ops (add/remove/move). Unit-tested heavily.
-- [ ] `DockutilBackend.execute(ops)` with `--no-restart`, plus `DockRestarter`. Verify by re-reading the Dock after every write and comparing to the expected state (dockutil exit 0 does not prove the write happened); canonicalize plist paths; never `--remove spacer-tiles` (see [technical-notes.md](technical-notes.md)).
-- [ ] `SnapshotStore`: copy `com.apple.dock.plist` before each apply. Keep the last N (default 50). Restore via `defaults import com.apple.dock <file>` + restart.
-- [ ] `ProfileApplier` with rollback on failure.
-- [ ] First launch: auto-save the current Dock as the **Default** profile.
+- [x] Models + JSON `ProfileStore` (atomic writes, schemaVersion).
+- [x] Read Dock via CFPreferences / PropertyListSerialization (see spike 0.5): parse into `[DockItem]`. Resolve `bundleId` via `Bundle(url:)`.
+- [x] `DiffEngine`: current → target ops (add/remove/move). Unit-tested heavily.
+- [x] `DockutilBackend.execute(ops)` with `--no-restart`, plus `DockRestarter`. Verify by re-reading the Dock after every write and comparing to the expected state (dockutil exit 0 does not prove the write happened); canonicalize plist paths; never `--remove spacer-tiles` (see [technical-notes.md](technical-notes.md)).
+- [x] `SnapshotStore`: copy `com.apple.dock.plist` before each apply. Keep the last N (default 50). Restore via `defaults import com.apple.dock <file>` + restart.
+- [x] `ProfileApplier` with rollback on failure.
+- [x] First launch: auto-save the current Dock as the **Default** profile.
 
 UI:
 - [ ] Menu bar: profile list (checkmark on active), "Save current Dock as…", "Undo last change", "Open editor".
