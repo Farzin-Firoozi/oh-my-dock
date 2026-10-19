@@ -8,9 +8,17 @@ enum AppEnvironment {
         let menuBar: MenuBarViewModel
         let hotkeys: HotkeyService
         let settings: SettingsViewModel
+        let history: HistoryViewModel
+        /// The one profile store; the editor and settings share it with the menu bar.
+        let profiles: ProfileStore
+        /// Serialises every live-Dock mutation across the menu bar and history.
+        let gate: DockOperationGate
     }
 
+    /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
+    /// app shares. Nothing else constructs these.
     static func makeShell() -> Shell {
+        let gate = DockOperationGate()
         let profiles = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())
         let snapshots = SnapshotStore()
         let restarter = LiveDockRestarter()
@@ -23,7 +31,8 @@ enum AppEnvironment {
             dock: backend,
             applier: applier,
             undoer: SnapshotUndoService(snapshots: snapshots, restarter: restarter),
-            bootstrap: { _ = try await bootstrapper.runIfNeeded() }
+            bootstrap: { _ = try await bootstrapper.runIfNeeded() },
+            gate: gate
         )
         hotkeys.attach(menuBar: menuBar)
         let settings = SettingsViewModel(
@@ -31,18 +40,11 @@ enum AppEnvironment {
             launchAtLogin: LiveLaunchAtLoginService(),
             hotkeys: hotkeys
         )
-        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings)
-    }
-
-    /// The live view model: real profile and snapshot stores, the live Dock, `killall Dock`.
-    static func makeMenuBarViewModel() -> MenuBarViewModel {
-        makeShell().menuBar
-    }
-
-    static func makeHistoryViewModel() -> HistoryViewModel {
-        let snapshots = SnapshotStore()
-        let history = SnapshotHistoryService(snapshots: snapshots, restarter: LiveDockRestarter())
-        return HistoryViewModel(history: history)
+        let history = HistoryViewModel(
+            history: SnapshotHistoryService(snapshots: snapshots, restarter: restarter),
+            gate: gate
+        )
+        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, profiles: profiles, gate: gate)
     }
 
     private static func makeLiveBackend() -> any DockBackend {

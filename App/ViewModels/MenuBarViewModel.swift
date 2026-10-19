@@ -58,7 +58,9 @@ final class MenuBarViewModel {
     var newProfileName = ""
     var showsDiffSheet = false
 
-    var isBusy: Bool { activity != nil }
+    var isBusy: Bool { activity != nil || gate.isBusy }
+    /// What another window (the history window) is doing to the Dock, when this model is idle.
+    var externalActivity: String? { activity == nil ? gate.current : nil }
     var canUndo: Bool { undoTarget != nil && !isBusy }
 
     // MARK: Dependencies
@@ -68,6 +70,7 @@ final class MenuBarViewModel {
     @ObservationIgnored private let applier: any ProfileApplying
     @ObservationIgnored private let undoer: any DockUndoing
     @ObservationIgnored private let bootstrap: (@Sendable () async throws -> Void)?
+    @ObservationIgnored private let gate: DockOperationGate
 
     @ObservationIgnored private var lastAppliedID: UUID?
     @ObservationIgnored private var operation: Task<Void, Never>?
@@ -78,8 +81,10 @@ final class MenuBarViewModel {
         dock: any DockBackend,
         applier: any ProfileApplying,
         undoer: any DockUndoing,
-        bootstrap: (@Sendable () async throws -> Void)? = nil
+        bootstrap: (@Sendable () async throws -> Void)? = nil,
+        gate: DockOperationGate = DockOperationGate()
     ) {
+        self.gate = gate
         self.library = library
         self.dock = dock
         self.applier = applier
@@ -118,7 +123,10 @@ final class MenuBarViewModel {
 
     /// Starts applying `profile`; the popover's click handler. Use `cancelOperation()` to stop it.
     func apply(_ profile: Profile) {
-        guard !isBusy else { return }
+        guard !isBusy else {
+            show(.failure, "Another Dock change is already running. Try again when it finishes.")
+            return
+        }
         operation = Task { await performApply(profile) }
     }
 
@@ -129,9 +137,11 @@ final class MenuBarViewModel {
         defer { activity = nil }
 
         do {
-            let result = try await applier.apply(profile) { [weak self] preview in
-                guard let self else { return false }
-                return await self.requestConfirmation(for: preview)
+            let result = try await gate.run("Applying “\(profile.name)”") {
+                try await applier.apply(profile) { [weak self] preview in
+                    guard let self else { return false }
+                    return await self.requestConfirmation(for: preview)
+                }
             }
             switch result {
             case let .applied(report):
@@ -206,7 +216,7 @@ final class MenuBarViewModel {
         banner = nil
         defer { activity = nil }
         do {
-            try await undoer.undo(target)
+            try await gate.run("Restoring the previous Dock") { try await undoer.undo(target) }
             lastAppliedID = nil
             show(.success, "Restored the Dock from before the last change.")
         } catch {

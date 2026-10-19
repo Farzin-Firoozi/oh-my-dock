@@ -21,17 +21,24 @@ final class HistoryViewModel {
     }
 
     private(set) var snapshots: [Snapshot] = []
-    private(set) var isBusy = false
+    private(set) var isWorking = false
     var pendingAction: PendingAction?
     var errorMessage: String?
+
+    /// True while this window or any other Dock operation (the menu bar's) is running.
+    var isBusy: Bool { isWorking || gate.isBusy }
+    /// What the Dock is busy with, for display.
+    var busyDescription: String? { isBusy ? (gate.current ?? "Working…") : nil }
 
     /// True while toolbar actions must stay disabled: an operation runs or an alert is up.
     var isInteractionLocked: Bool { isBusy || pendingAction != nil || errorMessage != nil }
 
     @ObservationIgnored private let history: any SnapshotHistoryManaging
+    @ObservationIgnored private let gate: DockOperationGate
 
-    init(history: any SnapshotHistoryManaging) {
+    init(history: any SnapshotHistoryManaging, gate: DockOperationGate = DockOperationGate()) {
         self.history = history
+        self.gate = gate
     }
 
     func load() async {
@@ -59,8 +66,11 @@ final class HistoryViewModel {
     /// which can happen before the button's closure runs.
     @discardableResult
     func confirm(_ action: PendingAction) -> Task<Void, Never>? {
-        guard !isBusy else { return nil }
         pendingAction = nil
+        guard !isBusy else {
+            errorMessage = "Another Dock change is running. Try again when it finishes."
+            return nil
+        }
         return Task { await perform(action) }
     }
 
@@ -79,16 +89,16 @@ final class HistoryViewModel {
 
     func perform(_ action: PendingAction) async {
         guard !isBusy else { return }
-        isBusy = true
+        isWorking = true
         errorMessage = nil
-        defer { isBusy = false }
+        defer { isWorking = false }
 
         do {
             switch action {
             case let .restore(snapshot):
-                try await history.restore(id: snapshot.id)
+                try await gate.run("Restoring a snapshot") { try await history.restore(id: snapshot.id) }
             case let .delete(snapshot):
-                try await history.delete(id: snapshot.id)
+                try await gate.run("Deleting a snapshot") { try await history.delete(id: snapshot.id) }
             }
             await load()
         } catch {
@@ -103,9 +113,9 @@ final class HistoryViewModel {
 
     func setPinned(_ pinned: Bool, for snapshot: Snapshot) async {
         guard !isBusy else { return }
-        isBusy = true
+        isWorking = true
         errorMessage = nil
-        defer { isBusy = false }
+        defer { isWorking = false }
 
         do {
             if pinned {

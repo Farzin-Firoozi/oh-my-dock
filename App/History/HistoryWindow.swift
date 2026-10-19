@@ -5,8 +5,9 @@ struct HistoryWindow: View {
     @State private var model: HistoryViewModel
     @State private var selection: UUID?
 
-    init(model: @autoclosure @escaping () -> HistoryViewModel = AppEnvironment.makeHistoryViewModel()) {
-        _model = State(initialValue: model())
+    /// The model is shared app-wide so history and the menu bar use one gate and one set of stores.
+    init(model: HistoryViewModel) {
+        _model = State(initialValue: model)
     }
 
     var body: some View {
@@ -41,6 +42,14 @@ struct HistoryWindow: View {
         }
         .navigationTitle("History")
         .toolbar {
+            ToolbarItem {
+                if let busy = model.busyDescription {
+                    HStack(spacing: 6) {
+                        ProgressView().controlSize(.small)
+                        Text(busy).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+            }
             ToolbarItemGroup {
                 Button("Restore", systemImage: "arrow.counterclockwise") {
                     selectedSnapshot.map(model.requestRestore)

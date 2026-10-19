@@ -3,12 +3,13 @@ import OhMyDockCore
 import SwiftUI
 
 /// The profile editor: profile sidebar, Dock strip canvas and a tile inspector.
-/// Host it in a `Window("Editor", id: "editor") { EditorWindow() }` scene.
+/// Host it in a `Window("Editor", id: "editor")` scene.
 struct EditorWindow: View {
     @State private var model: EditorViewModel
     @State private var showsInspector = true
 
-    init(store: any EditorProfileStore = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())) {
+    /// The store is the app-wide `ProfileStore`, so editor edits and other writers see the same files.
+    init(store: any EditorProfileStore) {
         _model = State(initialValue: EditorViewModel(store: store))
     }
 

@@ -29,10 +29,10 @@ struct OhMyDockApp: App {
             SettingsView(model: shell.settings)
         }
 
-        Window("Editor", id: "editor") { EditorWindow() }
+        Window("Editor", id: "editor") { EditorWindow(store: shell.profiles) }
         .defaultSize(width: 900, height: 600)
 
-        Window("History", id: "history") { HistoryWindow() }
+        Window("History", id: "history") { HistoryWindow(model: shell.history) }
         .defaultSize(width: 700, height: 420)
     }
 }

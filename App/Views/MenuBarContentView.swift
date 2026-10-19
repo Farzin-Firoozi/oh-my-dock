@@ -21,6 +21,15 @@ struct MenuBarContentView: View {
                 ActivityCard(activity: activity, canCancel: model.confirmation == nil) {
                     model.cancelOperation()
                 }
+            } else if let external = model.externalActivity {
+                Card {
+                    HStack(spacing: 10) {
+                        ProgressView().controlSize(.small)
+                        Text("\(external)…").font(.callout)
+                        Spacer()
+                    }
+                    .padding(10)
+                }
             }
 
             if let banner = model.banner {
