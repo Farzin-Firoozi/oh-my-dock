@@ -64,7 +64,9 @@ extension Profile {
     ///   app launches on switch.
     /// - The profile gets a fresh `id` so an import can never overwrite a local profile.
     ///
-    /// Paths are checked as text; symlinks are not resolved.
+    /// Paths are checked as text and, when they exist, again after resolving symlinks (the
+    /// resolved path must still be under the resolved home). Length caps apply to characters
+    /// and to UTF-8 bytes (4 per allowed character).
     ///
     /// - Throws: `ImportSanitizationError.invalidProfile` when the result still fails
     ///   `validate()`.
@@ -78,10 +80,18 @@ extension Profile {
 
 private struct ProfileImportSanitizer {
     let home: String
+    /// `home` with symlinks resolved, for checking resolved paths.
+    let resolvedHome: String
     var changes: [ImportSanitizationChange] = []
 
     init(home: String) {
-        self.home = home.hasSuffix("/") ? String(home.dropLast()) : home
+        let trimmed = Self.trimmed(home)
+        self.home = trimmed
+        self.resolvedHome = Self.trimmed(URL(fileURLWithPath: trimmed).resolvingSymlinksInPath().path)
+    }
+
+    private static func trimmed(_ path: String) -> String {
+        path.hasSuffix("/") && path.count > 1 ? String(path.dropLast()) : path
     }
 
     mutating func run(_ input: Profile) throws(ImportSanitizationError) -> SanitizedProfile {
@@ -144,31 +154,31 @@ private struct ProfileImportSanitizer {
             return item
         case .url(var url):
             guard Self.isAllowed(url.url) else { return drop(section, index, .disallowedURL) }
-            guard url.url.absoluteString.count <= Profile.maxImportLocationLength else {
+            guard !Self.exceeds(url.url.absoluteString, Profile.maxImportLocationLength) else {
                 return drop(section, index, .stringTooLong)
             }
             url.label = label(url.label)
             return .url(url)
         case .folder(var folder):
             guard isUnderHome(folder.path) else { return drop(section, index, .disallowedPath) }
-            guard folder.path.count <= Profile.maxImportLocationLength else {
+            guard !Self.exceeds(folder.path, Profile.maxImportLocationLength) else {
                 return drop(section, index, .stringTooLong)
             }
             folder.label = label(folder.label)
             return .folder(folder)
         case .file(var file):
             guard isUnderHome(file.path) else { return drop(section, index, .disallowedPath) }
-            guard file.path.count <= Profile.maxImportLocationLength else {
+            guard !Self.exceeds(file.path, Profile.maxImportLocationLength) else {
                 return drop(section, index, .stringTooLong)
             }
             file.label = label(file.label)
             return .file(file)
         case .app(var app):
-            guard app.bundleId.count <= Profile.maxImportTextLength else {
+            guard !Self.exceeds(app.bundleId, Profile.maxImportTextLength) else {
                 return drop(section, index, .stringTooLong)
             }
             if let path = app.path,
-               !isUnderHome(path) || path.count > Profile.maxImportLocationLength {
+               !isUnderHome(path) || Self.exceeds(path, Profile.maxImportLocationLength) {
                 app.path = nil
                 changes.append(.clearedAppPath(section, index: index))
             }
@@ -202,9 +212,20 @@ private struct ProfileImportSanitizer {
     }
 
     private mutating func truncated(_ string: String, to limit: Int, field: String) -> String {
-        guard string.count > limit else { return string }
+        guard Self.exceeds(string, limit) else { return string }
         changes.append(.truncatedString(field: field))
-        return String(string.prefix(limit))
+        var result = String(string.prefix(limit))
+        // A few characters (combining marks) can be many bytes.
+        while result.utf8.count > limit * Self.maxBytesPerCharacter { result.removeLast() }
+        return result
+    }
+
+    /// Caps count characters and also UTF-8 bytes (`maxBytesPerCharacter` per allowed
+    /// character), since one `Character` can span arbitrarily many bytes.
+    private static let maxBytesPerCharacter = 4
+
+    private static func exceeds(_ string: String, _ limit: Int) -> Bool {
+        string.count > limit || string.utf8.count > limit * maxBytesPerCharacter
     }
 
     private static func isAllowed(_ url: URL) -> Bool {
@@ -216,11 +237,22 @@ private struct ProfileImportSanitizer {
 
     /// Absolute, no `.`/`..` components, and a strict descendant of the home directory
     /// (compared by path component, so `/Users/mehack` is not under `/Users/me`).
+    ///
+    /// When the path exists, its symlink-resolved form must also be under the resolved home, so
+    /// a link inside home cannot point the tile outside it. A path that does not exist yet can
+    /// only be checked as text.
     private func isUnderHome(_ path: String) -> Bool {
+        guard Self.isStrictDescendant(path, of: home) else { return false }
+        guard FileManager.default.fileExists(atPath: path) else { return true }
+        let resolved = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return Self.isStrictDescendant(resolved, of: resolvedHome)
+    }
+
+    private static func isStrictDescendant(_ path: String, of root: String) -> Bool {
         guard Profile.isAbsolutePath(path) else { return false }
-        let homeParts = home.split(separator: "/")
+        let rootParts = root.split(separator: "/")
         let parts = path.split(separator: "/")
-        return parts.count > homeParts.count && parts.starts(with: homeParts)
+        return parts.count > rootParts.count && parts.starts(with: rootParts)
     }
 
     /// Homebrew cask tokens: lowercase letters, digits, `-`, `@`, `+`, `.`, `_`, optionally

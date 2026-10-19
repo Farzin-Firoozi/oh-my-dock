@@ -241,4 +241,53 @@ import Testing
         #expect(a.profile.id != b.profile.id)
         #expect(a.profile.id != original.id)
     }
+
+    @Test func symlinkOutOfHomeIsRejectedWhenThePathExists() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sanitizer-\(UUID().uuidString)", isDirectory: true)
+        let homeDir = base.appendingPathComponent("home", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        let inside = homeDir.appendingPathComponent("real", isDirectory: true)
+        for dir in [homeDir, outside, inside] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: base) }
+        let escape = homeDir.appendingPathComponent("escape").path
+        let fine = homeDir.appendingPathComponent("fine").path
+        try FileManager.default.createSymbolicLink(atPath: escape, withDestinationPath: outside.path)
+        try FileManager.default.createSymbolicLink(atPath: fine, withDestinationPath: inside.path)
+
+        let profile = Profile(name: "P", others: [
+            .folder(FolderItem(path: escape)),
+            .folder(FolderItem(path: fine)),
+        ])
+        let result = try profile.sanitizedForImport(homeDirectory: homeDir)
+
+        #expect(result.profile.others == [.folder(FolderItem(path: fine))])
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .disallowedPath)))
+    }
+
+    @Test func byteLengthIsCappedAsWellAsCharacterCount() throws {
+        // One grapheme, but over 1 KiB of UTF-8.
+        let heavy = "e" + String(repeating: "\u{0301}", count: 600)
+        #expect(heavy.count == 1 && heavy.utf8.count > 4 * Profile.maxImportTextLength)
+        let heavyPath = "/Users/me/" + "e" + String(repeating: "\u{0301}", count: 2_100)
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.example.a", name: heavy)),
+            .app(AppRef(bundleId: heavy, name: "B")),
+        ], others: [
+            .folder(FolderItem(path: heavyPath)),
+        ])
+
+        let result = try sanitize(profile)
+
+        guard case let .app(kept)? = result.profile.apps.first else {
+            Issue.record("Expected the first app to stay")
+            return
+        }
+        #expect(kept.name.utf8.count <= 4 * Profile.maxImportTextLength)
+        #expect(result.changes.contains(.truncatedString(field: "app name")))
+        #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .stringTooLong)))
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .stringTooLong)))
+    }
 }
