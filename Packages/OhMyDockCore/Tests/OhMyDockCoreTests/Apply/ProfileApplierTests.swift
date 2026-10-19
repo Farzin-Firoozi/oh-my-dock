@@ -723,6 +723,18 @@ private struct FileDomainIO: DockDomainIO {
     func importDomain(from url: URL) async throws {
         try Data(contentsOf: url).write(to: plist, options: .atomic)
     }
+
+    func deleteKey(_ key: String) async throws {
+        var format = PropertyListSerialization.PropertyListFormat.binary
+        var dictionary = try PropertyListSerialization.propertyList(
+            from: Data(contentsOf: plist),
+            options: [],
+            format: &format
+        ) as? [String: Any] ?? [:]
+        dictionary.removeValue(forKey: key)
+        try PropertyListSerialization.data(fromPropertyList: dictionary, format: .binary, options: 0)
+            .write(to: plist, options: .atomic)
+    }
 }
 
 /// Runs the real bundled dockutil through `DockutilBackend(.file(temp plist))`, with snapshots
