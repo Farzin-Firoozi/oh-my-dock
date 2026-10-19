@@ -99,6 +99,8 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 | 4.5 | `DockutilScriptExporter` + JSON import/export with strict schema validation | Grok | A |
 | 4.2 | Prefs panel: live preview, revert, reset, per-profile | Sonnet | B |
 | 4.4 | Confirmation sheet (no permission flow needed in the tested scope — spike 0.6; release gate 3.5 still applies) | Flash-H | B |
+| 4.M | MacBook mockup editor canvas: vector MacBook (model auto-detected from `hw.model`, color picker since macOS does not expose color), real desktop wallpaper, menu bar, interactive Dock at the bottom that follows DockPrefs. No network, no Apple images | Sonnet | B |
+| 4.F | Phase 4 fix round: Reset removes keys instead of guessed defaults; block apply/undo/restore during a prefs preview; revert preview on quit; AppKit quit/launch on the main thread | Sonnet | B |
 | 4.R | Review: Sol (all; focus data loss in 4.3), Grok (all except 4.5; second opinion) · Verify: Terra | Sol + Grok + Composer | C |
 
 ## Phase 5: v0.3 (M3)
