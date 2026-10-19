@@ -102,7 +102,12 @@ public enum ProfileValidationError: Error, Hashable, Sendable {
 }
 
 extension Profile {
-    public func validate() throws(ProfileValidationError) {
+    /// - Parameter allowingUnknownTiles: Local profiles captured from the live Dock may hold
+    ///   `.unknown` tiles (types the model does not cover). Applying keeps such a tile in place
+    ///   while the Dock has it, and cannot create one. Anything that leaves the machine, such as
+    ///   a gallery import or export, validates with the default (false) so they are stripped
+    ///   first.
+    public func validate(allowingUnknownTiles: Bool = false) throws(ProfileValidationError) {
         if name.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             throw .emptyName
         }
@@ -112,10 +117,12 @@ extension Profile {
         for section in DockSection.allCases {
             var labels: Set<String> = []
             for (index, item) in items(in: section).enumerated() {
-                try Self.validate(item, in: section, at: index)
+                try Self.validate(item, in: section, at: index, allowingUnknownTiles: allowingUnknownTiles)
                 // dockutil refuses to add a tile whose computed label is already used in the
-                // section (spacers are never stored, so they never collide).
-                guard !item.isSpacer else { continue }
+                // section (spacers are never stored, so they never collide). Unknown tiles are
+                // never added, so they cannot be refused either.
+                if item.isSpacer { continue }
+                if case .unknown = item { continue }
                 let label = DockutilPlanner.computedLabel(of: item)
                 if !label.isEmpty, !labels.insert(label).inserted {
                     throw .duplicateLabel(section, index: index, label: label)
@@ -129,10 +136,17 @@ extension Profile {
         }
     }
 
-    private static func validate(_ item: DockItem, in section: DockSection, at index: Int) throws(ProfileValidationError) {
+    private static func validate(
+        _ item: DockItem,
+        in section: DockSection,
+        at index: Int,
+        allowingUnknownTiles: Bool
+    ) throws(ProfileValidationError) {
         switch item {
         case .unknown(let tile):
-            throw .unknownItem(section, index: index, tileType: tile.tileType)
+            if !allowingUnknownTiles {
+                throw .unknownItem(section, index: index, tileType: tile.tileType)
+            }
         case .app(let ref):
             if ref.bundleId.isEmpty, (ref.path ?? "").isEmpty {
                 throw .appMissingIdentity(section, index: index)

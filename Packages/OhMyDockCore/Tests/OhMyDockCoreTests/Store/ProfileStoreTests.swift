@@ -25,6 +25,16 @@ import Testing
         #expect(loaded == profile)
     }
 
+    @Test func localProfileKeepsUnknownTilesAcrossSaveAndLoad() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let store = ProfileStore(rootDirectory: root)
+        let profile = Profile(name: "Captured", apps: [.unknown(UnknownTile(tileType: "mystery-tile", label: "Mystery"))])
+        try await store.save(profile)
+        #expect(try await store.load(id: profile.id) == profile)
+    }
+
     @Test func listSortedByNameCaseInsensitive() async throws {
         let root = try makeTempRoot()
         defer { cleanup(root) }

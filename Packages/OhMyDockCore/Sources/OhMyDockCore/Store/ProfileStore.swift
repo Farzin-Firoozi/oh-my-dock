@@ -94,7 +94,8 @@ public actor ProfileStore {
     }
 
     public func save(_ profile: Profile) throws {
-        try profile.validate()
+        // Local profiles keep the live Dock's tiles the model cannot describe.
+        try profile.validate(allowingUnknownTiles: true)
         _ = ensureRootDirectoryExists()
         let data = try profile.jsonData()
         let url = profileURL(for: profile.id)

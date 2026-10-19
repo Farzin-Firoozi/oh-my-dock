@@ -11,7 +11,7 @@ public enum DockItem: Hashable, Sendable {
     case file(FileItem)
     case spacer(SpacerKind)
     /// Read-only passthrough for tile types the model doesn't cover, so reading the
-    /// live Dock never silently drops items. Rejected by `Profile.validate()`.
+    /// live Dock never silently drops items. Rejected by `Profile.validate()` unless it allows unknown tiles (local profiles).
     case unknown(UnknownTile)
 }
 

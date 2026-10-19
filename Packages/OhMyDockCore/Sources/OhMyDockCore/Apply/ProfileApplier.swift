@@ -388,7 +388,7 @@ public actor ProfileApplier {
 
     private func validate(_ profile: Profile) throws {
         do {
-            try profile.validate()
+            try profile.validate(allowingUnknownTiles: true)
         } catch {
             throw ApplyError.invalidProfile(error)
         }

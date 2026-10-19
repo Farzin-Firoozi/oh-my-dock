@@ -432,6 +432,53 @@ struct ProfileApplierTests {
         }
     }
 
+    // MARK: Unknown tiles
+
+    private let mystery = DockItem.unknown(UnknownTile(tileType: "mystery-tile", label: "Mystery"))
+
+    @Test func unknownTilesStayInPlaceWhileTheRestIsApplied() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp, mystery, calculator]))
+        defer { env.cleanup() }
+
+        let result = try await env.applier().apply(profile(apps: [mystery, calculator, notes]))
+
+        guard case .applied = result else {
+            Issue.record("Expected .applied, got \(result)")
+            return
+        }
+        #expect(await env.backend.state == DockState(apps: [mystery, calculator, notes]))
+        // The unknown tile is never re-inserted.
+        let operations = await env.backend.appliedBatches.flatMap { $0 }
+        #expect(!operations.contains(.insert(mystery, section: .apps, index: 0)))
+    }
+
+    @Test func unknownTileAlreadyInPlaceIsNoChange() async throws {
+        let env = try Env(current: DockState(apps: [calculator], others: [mystery]))
+        defer { env.cleanup() }
+
+        let result = try await env.applier().apply(profile(apps: [calculator], others: [mystery]))
+
+        guard case .noChanges = result else {
+            Issue.record("Expected .noChanges, got \(result)")
+            return
+        }
+    }
+
+    @Test func unknownTileTheDockLacksCannotBeCreated() async throws {
+        let env = try Env(current: DockState(apps: [calculator]))
+        defer { env.cleanup() }
+
+        let error = await applyError { try await env.applier().apply(profile(apps: [calculator, mystery])) }
+
+        guard case let .unsatisfiable(issues)? = error else {
+            Issue.record("Expected unsatisfiable, got \(String(describing: error))")
+            return
+        }
+        #expect(issues == [.unknownTileNotInsertable(section: .apps, index: 1)])
+        #expect(await env.backend.appliedBatches.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+    }
+
     // MARK: Confirm
 
     @Test func declinedConfirmationCancelsWithoutWriting() async throws {

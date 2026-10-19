@@ -76,6 +76,23 @@ import Testing
         ).validate()
     }
 
+    @Test func localValidationAllowsUnknownTiles() throws {
+        let unknown = DockItem.unknown(UnknownTile(tileType: "recents-tile", label: "Recents"))
+        let profile = profile(apps: [unknown], others: [unknown])
+        try profile.validate(allowingUnknownTiles: true)
+        #expect(throws: ProfileValidationError.unknownItem(.apps, index: 0, tileType: "recents-tile")) {
+            try profile.validate()
+        }
+    }
+
+    @Test func localValidationStillChecksEverythingElse() {
+        let unknown = DockItem.unknown(UnknownTile(tileType: "recents-tile"))
+        let relative = DockItem.folder(FolderItem(path: "Downloads"))
+        #expect(throws: ProfileValidationError.pathNotAbsolute(.others, index: 1, path: "Downloads")) {
+            try profile(others: [unknown, relative]).validate(allowingUnknownTiles: true)
+        }
+    }
+
     @Test(arguments: ["~/Downloads", "Downloads", "./Downloads", "/Users/me/../other", "/Users/./me", ""])
     func rejectsNonAbsoluteFolderPaths(_ path: String) {
         #expect(throws: ProfileValidationError.pathNotAbsolute(.others, index: 0, path: path)) {
