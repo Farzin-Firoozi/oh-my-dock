@@ -82,14 +82,15 @@ public struct FirstLaunchBootstrapper: Sendable {
     /// - Skips if the marker file already exists or if `skipIfProfilesExist` is true
     ///   and the profile store contains at least one profile (in which case the marker is written).
     /// - Otherwise reads the current Dock, filters out `.unknown` items and validates a profile
-    ///   named "Default" (or "Default (2)" on collision). Tiles whose label another tile of the
-    ///   section already has get a numbered label ("Docs (2)"); an app that cannot be relabelled
-    ///   is dropped and reported like an unknown tile. Only then does it pin a "First launch"
-    ///   snapshot, re-read the Dock and compare: when the Dock changed in between, the snapshot
-    ///   (if new) is deleted and the capture is retried once, then `FirstLaunchError` is thrown.
-    ///   Profile and snapshot are therefore the same capture.
+    ///   named "Default" (or "Default (2)" on collision). Tiles whose label another tile already
+    ///   has as a match key get a numbered label ("Docs (2)") that no tile uses; an app that
+    ///   cannot be relabelled is dropped and reported like an unknown tile. Only then does it pin
+    ///   a "First launch" snapshot and parse that snapshot's plist: when it differs from the Dock
+    ///   that was read, the snapshot (if new) is deleted and the capture is retried once, then
+    ///   `FirstLaunchError` is thrown. Profile and snapshot are therefore the same capture.
     /// - An earlier pinned "First launch" snapshot is reused only while it still equals the Dock;
-    ///   otherwise a fresh one is taken and the stale one is unpinned (kept, but prunable).
+    ///   otherwise a fresh one is taken and every pinned one that does not match is unpinned
+    ///   (kept, but prunable).
     ///   A failed read, validation or capture leaves no new snapshot behind.
     /// - Saves the profile and writes the marker file atomically.
     /// - Thread-safe and serialized by an internal coordinator.
@@ -125,7 +126,10 @@ public struct FirstLaunchBootstrapper: Sendable {
                     profileName: profileName,
                     matching: dockState
                 )
-                guard try await reader() == dockState else {
+                // The snapshot is what gets restored, so it is what the profile must equal; reading
+                // the Dock a second time would only compare two reads.
+                // One that cannot be read back counts as different.
+                guard await storedDock(of: snapshot) == dockState else {
                     if isNew { try? await snapshotStore.delete(id: snapshot.id) }
                     attempt += 1
                     if attempt >= 2 { throw FirstLaunchError.dockChangedDuringCapture }
@@ -240,12 +244,15 @@ public struct FirstLaunchBootstrapper: Sendable {
         let pinned = await snapshotStore.list().snapshots
             .filter { $0.pinned && $0.reason == Self.snapshotReason }
         var stale: [Snapshot] = []
+        var reusable: Snapshot?
         for candidate in pinned {
-            if await storedDock(of: candidate) == dockState {
-                return (candidate, false, stale)
+            if await storedDock(of: candidate) != dockState {
+                stale.append(candidate)
+            } else if reusable == nil {
+                reusable = candidate
             }
-            stale.append(candidate)
         }
+        if let reusable { return (reusable, false, stale) }
         let snapshot = try await snapshotStore.save(
             reason: Self.snapshotReason,
             profileName: profileName,
