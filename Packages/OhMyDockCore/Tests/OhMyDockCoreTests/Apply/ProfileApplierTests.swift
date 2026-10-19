@@ -928,6 +928,40 @@ struct ProfileApplierTests {
         #expect(await env.backend.appliedBatches.count == 1)   // only the concurrent edit
         #expect(await env.restarter.count == 0)
         #expect(await env.io.imports.isEmpty)
+        // The backup of a Dock that was never written is not kept.
+        #expect(await env.snapshots.isEmpty)
+    }
+
+    @Test func cancellationAfterTheSnapshotDiscardsItAndWritesNothing() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let reads = ReadHook(inner: env.backend)
+        let applier = env.applier(backend: reads)
+        let handle = TaskBox()
+        // Reads: plan, early check, late check. Cancelling after the early check is noticed
+        // once the snapshot exists, before anything is written.
+        await reads.onRead(2) { await handle.cancel() }
+
+        let task = Task { try await applier.apply(profile(apps: [calculator])) }
+        await handle.set(task)
+
+        #expect(try await task.value == .cancelled(rolledBack: false))
+        #expect(await env.backend.appliedBatches.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+        #expect(await env.restarter.count == 0)
+    }
+
+    @Test func noChangesLeavesNoSnapshotEvenAfterAConfirmation() async throws {
+        let env = try Env(current: DockState(apps: [calculator]))
+        defer { env.cleanup() }
+
+        let result = try await env.applier().apply(profile(apps: [calculator])) { _ in true }
+
+        guard case .noChanges = result else {
+            Issue.record("Expected .noChanges, got \(result)")
+            return
+        }
+        #expect(await env.snapshots.isEmpty)
     }
 
     // MARK: Cancellation and concurrency
@@ -1033,6 +1067,22 @@ struct ProfileApplierTests {
         let snapshot = try #require(snapshots.first)
         let imports = await env.io.imports
         #expect(imports == [try await env.store.load(id: snapshot.id)])
+    }
+}
+
+/// Lets a hook cancel the task that is only created after the hook was registered.
+private actor TaskBox {
+    private var task: Task<ApplyResult, any Error>?
+    private var cancelRequested = false
+
+    func set(_ task: Task<ApplyResult, any Error>) {
+        self.task = task
+        if cancelRequested { task.cancel() }
+    }
+
+    func cancel() {
+        cancelRequested = true
+        task?.cancel()
     }
 }
 

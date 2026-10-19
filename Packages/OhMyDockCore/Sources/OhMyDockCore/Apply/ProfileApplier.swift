@@ -314,10 +314,17 @@ public actor ProfileApplier {
                 reason: "Before applying profile \(profile.name)",
                 profileName: profile.name
             )
-            if Task.isCancelled { return .cancelled(rolledBack: false) }
 
-            // The plan's indices are only valid for the Dock it was computed from.
-            if try await backend.read() != first.current { throw ApplyError.dockChanged }
+            // Past this point the snapshot exists but nothing is written yet: leaving without
+            // writing must not leave a backup of an unchanged Dock behind.
+            do {
+                try Task.checkCancellation()
+                // The plan's indices are only valid for the Dock it was computed from.
+                if try await backend.read() != first.current { throw ApplyError.dockChanged }
+            } catch {
+                await discard(snapshot)
+                throw error
+            }
             preview = first
 
             plan = preview.plan
@@ -379,6 +386,12 @@ public actor ProfileApplier {
         } onCancel: {
             race.resolve(false)
         }
+    }
+
+    /// Drops a snapshot taken for a write that never happened. Best effort: a leftover backup is
+    /// harmless, a failed delete must not mask the reason the apply ended.
+    private func discard(_ snapshot: Snapshot) async {
+        try? await snapshots.delete(id: snapshot.id)
     }
 
     // MARK: Rollback
