@@ -192,10 +192,35 @@ import Testing
         #expect(item == .unknown(UnknownTile(tileType: "directory-tile", label: "Downloads")))
     }
 
-    @Test func missingFolderIntIsUnknown() throws {
+    @Test(arguments: ["showas", "displayas", "arrangement"])
+    func missingFolderIntTakesTheDefault(_ key: String) throws {
+        var tile = directoryTile(path: "/Users/tester/Downloads", stringType: 0, label: "Downloads", showas: 2, displayas: 1, arrangement: 3)
+        var data = try #require(tile["tile-data"] as? [String: Any])
+        data.removeValue(forKey: key)
+        tile["tile-data"] = data
+        let item = DockPlistParser.parseTile(tile, section: .others, resolvingBundleIdentifier: noop)
+        var expected = FolderItem(path: "/Users/tester/Downloads", view: .grid, display: .folder, sort: .dateModified, label: "Downloads")
+        switch key {
+        case "showas": expected.view = .auto
+        case "displayas": expected.display = .stack
+        default: expected.sort = .name
+        }
+        #expect(item == .folder(expected))
+    }
+
+    @Test func folderWithNoOptionsIsAutoStackName() throws {
+        var tile = directoryTile(path: "/Users/tester/Downloads", stringType: 0, label: nil, showas: 0, displayas: 0, arrangement: 1)
+        var data = try #require(tile["tile-data"] as? [String: Any])
+        for key in ["showas", "displayas", "arrangement"] { data.removeValue(forKey: key) }
+        tile["tile-data"] = data
+        let item = DockPlistParser.parseTile(tile, section: .others, resolvingBundleIdentifier: noop)
+        #expect(item == .folder(FolderItem(path: "/Users/tester/Downloads", view: .auto, display: .stack, sort: .name)))
+    }
+
+    @Test func folderIntOfTheWrongTypeIsStillUnknown() throws {
         var tile = directoryTile(path: "/Users/tester/Downloads", stringType: 0, label: "Downloads", showas: 2, displayas: 1, arrangement: 1)
         var data = try #require(tile["tile-data"] as? [String: Any])
-        data.removeValue(forKey: "arrangement")
+        data["showas"] = "grid"
         tile["tile-data"] = data
         let item = DockPlistParser.parseTile(tile, section: .others, resolvingBundleIdentifier: noop)
         #expect(item == .unknown(UnknownTile(tileType: "directory-tile", label: "Downloads")))

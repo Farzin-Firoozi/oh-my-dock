@@ -38,7 +38,8 @@ public enum DockPlistParser {
     /// - `file-tile` is an app when the path ends in `.app` or `bundle-identifier`
     ///   is present; otherwise it is a file.
     /// - `directory-tile` is a folder. `showas`, `displayas`, and `arrangement`
-    ///   use dockutil 3.1.3's integer values (see `folderView(showas:)`).
+    ///   use dockutil 3.1.3's integer values (see `folderView(showas:)`); a missing
+    ///   key means auto, stack, and name.
     /// - `url-tile` is a URL. `spacer-tile`, `small-spacer-tile`, and
     ///   `flex-spacer-tile` are spacers. Anything else is unknown.
     public static func parseTile(
@@ -124,18 +125,13 @@ public enum DockPlistParser {
     }
 
     private static func parseDirectoryTile(_ tile: [String: Any]) -> DockItem {
-        // Missing or unrecognized ints are not defaulted: a guessed view would
-        // write a different Dock setting back. The tile is kept as unknown.
         guard
             let data = DockPlistValues.dictionary(tile["tile-data"]),
             let fileData = DockPlistValues.dictionary(data["file-data"]),
             let path = absoluteFilePath(in: fileData),
-            let showas = DockPlistValues.int(data["showas"]),
-            let view = folderView(showas: showas),
-            let displayas = DockPlistValues.int(data["displayas"]),
-            let display = folderDisplay(displayas: displayas),
-            let arrangement = DockPlistValues.int(data["arrangement"]),
-            let sort = folderSort(arrangement: arrangement)
+            let view = folderOption(data["showas"], default: .auto, folderView(showas:)),
+            let display = folderOption(data["displayas"], default: .stack, folderDisplay(displayas:)),
+            let sort = folderOption(data["arrangement"], default: .name, folderSort(arrangement:))
         else {
             return unknown(from: tile, tileType: "directory-tile")
         }
@@ -223,6 +219,19 @@ public enum DockPlistParser {
     //   stack = 0, folder = 1
     // FolderSort (`arrangement`), DockUtil.swift:68-72:
     //   name = 1, dateadded = 2, datemodified = 3, datecreated = 4, kind = 5
+
+    /// A key the Dock leaves out means its default (a folder never customized has none of
+    /// `showas`, `displayas`, `arrangement`: auto, stack, name), which is also what dockutil
+    /// reports. A value that is present but not one dockutil knows stays nil: a guessed view
+    /// would write a different Dock setting back, so the tile is kept as unknown.
+    private static func folderOption<Option>(
+        _ value: Any?,
+        default fallback: Option,
+        _ option: (Int) -> Option?
+    ) -> Option? {
+        guard let value else { return fallback }
+        return DockPlistValues.int(value).flatMap(option)
+    }
 
     private static func folderView(showas: Int) -> FolderView? {
         switch showas {
