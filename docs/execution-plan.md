@@ -86,7 +86,7 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 
 **Release gates (mandatory, block any release):** 3.5 and 3.6 pass. No release ships quit/launch without 3.5.
 
-**Needs from user:** GitHub org/username, bundle ID (currently `app.ohmydock.OhMyDock`).
+**Needs from user:** GitHub org/username, bundle ID (decided: `io.github.farzin-firoozi.OhMyDock`; GitHub user `Farzin-Firoozi`).
 
 **Deferred (needs a paid account):** Developer ID signing, notarization, stapling, notarized-build gate test. "Launch at login" may fail to register with ad-hoc signing; test it and keep a fallback.
 

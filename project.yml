@@ -1,7 +1,7 @@
 name: OhMyDock
 
 options:
-  bundleIdPrefix: app.ohmydock
+  bundleIdPrefix: io.github.farzin-firoozi
   deploymentTarget:
     macOS: "14.0"
 
@@ -11,7 +11,7 @@ settings:
     SWIFT_STRICT_CONCURRENCY: complete
     MACOSX_DEPLOYMENT_TARGET: "14.0"
     # Placeholder: final bundle ID not decided yet. Change only here.
-    PRODUCT_BUNDLE_IDENTIFIER: app.ohmydock.OhMyDock
+    PRODUCT_BUNDLE_IDENTIFIER: io.github.farzin-firoozi.OhMyDock
     # Local dev: "Sign to Run Locally" (ad-hoc), no team.
     CODE_SIGN_STYLE: Automatic
     CODE_SIGN_IDENTITY: "-"
@@ -110,7 +110,7 @@ targets:
     settings:
       base:
         GENERATE_INFOPLIST_FILE: YES
-        PRODUCT_BUNDLE_IDENTIFIER: app.ohmydock.OhMyDockTests
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.farzin-firoozi.OhMyDockTests
         ENABLE_TESTING_SEARCH_PATHS: YES
 
 schemes:
