@@ -312,6 +312,24 @@ final class EditorViewModel {
         }
     }
 
+    // MARK: - Dock preferences
+
+    /// Sets or clears (`nil`: leave the Dock's preferences alone) a profile's Dock preferences.
+    /// Stored through `update(id:_:)`, so it never overwrites tiles or the hotkey.
+    @discardableResult
+    func setPrefs(_ prefs: DockPrefs?, for id: UUID) -> Bool {
+        guard let index = profiles.firstIndex(where: { $0.id == id }) else {
+            error = .noProfileSelected
+            return false
+        }
+        var profile = profiles[index]
+        profile.prefs = prefs
+        guard validated(profile) else { return false }
+        profiles[index] = profile
+        enqueue { store in try await store.update(id: id) { $0.prefs = prefs } }
+        return true
+    }
+
     // MARK: - Mutation plumbing
 
     /// Applies `edit` to a copy of the selected profile and commits it only if it validates.

@@ -365,7 +365,7 @@ public struct DockPrefsWriter: DockPrefsWriting {
 // MARK: - Capture → model
 
 extension DockPrefsCapture {
-    func asDockPrefs() -> DockPrefs {
+    public func asDockPrefs() -> DockPrefs {
         func bool(_ key: DockPrefs.Key) -> Bool? {
             if case .bool(let value)? = values[key] { return value }
             return nil

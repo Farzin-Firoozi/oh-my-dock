@@ -14,6 +14,8 @@ enum AppEnvironment {
         let profiles: ProfileStore
         /// Serialises every live-Dock mutation across the menu bar and history.
         let gate: DockOperationGate
+        /// Previews Dock preferences from the editor; always called through `gate`.
+        let prefsPreviewer: any DockPrefsPreviewing
     }
 
     /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
@@ -73,7 +75,8 @@ enum AppEnvironment {
             currentVersion: AppVersion.current,
             opener: WorkspaceReleasePageOpener()
         )
-        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, updates: updates, profiles: profiles, gate: gate)
+        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, updates: updates, profiles: profiles, gate: gate,
+                     prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter))
     }
 
     private static func makeLiveBackend() -> any DockBackend {

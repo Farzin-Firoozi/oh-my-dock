@@ -381,4 +381,33 @@ private func makeModel(_ profiles: [Profile] = []) async -> (EditorViewModel, Fa
             Issue.record("expected folder then file"); return
         }
     }
+
+    @Test func setPrefsPersistsThroughUpdateWithoutTouchingOtherFields() async {
+        var profile = Profile(name: "Work")
+        profile.apps = [app("Safari")]
+        let (model, store) = await makeModel([profile])
+        let id = model.selectedProfileID!
+        await store.setStoredHotkey(id, Hotkey(keyCode: 1, modifiers: [.command]))
+
+        #expect(model.setPrefs(DockPrefs(tileSize: 64), for: id))
+        await model.flush()
+        #expect(model.selectedProfile?.prefs?.tileSize == 64)
+        #expect(await store.saved[id]?.prefs?.tileSize == 64)
+        #expect(await store.saved[id]?.hotkey != nil)
+        #expect(await store.saved[id]?.apps.count == 1)
+
+        #expect(model.setPrefs(nil, for: id))
+        await model.flush()
+        #expect(await store.saved[id]?.prefs == nil)
+    }
+
+    @Test func setPrefsRefusesInvalidValues() async {
+        let (model, store) = await makeModel([Profile(name: "Work")])
+        let id = model.selectedProfileID!
+        #expect(!model.setPrefs(DockPrefs(tileSize: 999), for: id))
+        await model.flush()
+        #expect(model.selectedProfile?.prefs == nil)
+        #expect(await store.saved[id]?.prefs == nil)
+        #expect(model.error != nil)
+    }
 }
