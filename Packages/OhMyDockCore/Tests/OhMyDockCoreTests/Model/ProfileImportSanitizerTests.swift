@@ -181,7 +181,7 @@ import Testing
                 .app(AppRef(bundleId: "com.a", name: long)),
                 .app(AppRef(bundleId: long, name: "Big id")),
             ],
-            others: [.file(FileItem(path: "/Users/me/a", label: long))]
+            others: [.file(FileItem(path: "/Users/me/a", label: String(repeating: "y", count: Profile.maxImportTextLength + 50)))]
         ))
         #expect(result.profile.name.count == Profile.maxNameLength)
         #expect(result.profile.apps.count == 1)
@@ -310,8 +310,9 @@ import Testing
         let heavy = "e" + String(repeating: "\u{0301}", count: 600)
         #expect(heavy.count == 1 && heavy.utf8.count > 4 * Profile.maxImportTextLength)
         let heavyPath = "/Users/me/" + "e" + String(repeating: "\u{0301}", count: 2_100)
+        let heavyName = String(repeating: "x", count: Profile.maxImportTextLength - 1) + heavy
         let profile = Profile(name: "P", apps: [
-            .app(AppRef(bundleId: "com.example.a", name: heavy)),
+            .app(AppRef(bundleId: "com.example.a", name: heavyName)),
             .app(AppRef(bundleId: heavy, name: "B")),
         ], others: [
             .folder(FolderItem(path: heavyPath)),
@@ -327,5 +328,110 @@ import Testing
         #expect(result.changes.contains(.truncatedString(field: "app name")))
         #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .stringTooLong)))
         #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .stringTooLong)))
+    }
+
+    // MARK: Collisions after shortening
+
+    @Test func nameShortenedToAnotherTilesBundleIdIsDropped() throws {
+        let id = String(repeating: "x", count: Profile.maxImportTextLength)
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: id, name: "Real")),
+            .app(AppRef(bundleId: "com.example.evil", name: id + "tail")),
+        ])
+
+        let result = try sanitize(profile)
+
+        #expect(result.profile.apps == [.app(AppRef(bundleId: id, name: "Real"))])
+        #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .labelCollision)))
+    }
+
+    @Test func shortenedTileGoesEvenWhenItComesFirst() throws {
+        let id = String(repeating: "x", count: Profile.maxImportTextLength)
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.example.evil", name: id + "tail")),
+            .app(AppRef(bundleId: id, name: "Real")),
+        ])
+
+        let result = try sanitize(profile)
+
+        #expect(result.profile.apps == [.app(AppRef(bundleId: id, name: "Real"))])
+        #expect(result.changes.contains(.droppedItem(.apps, index: 0, reason: .labelCollision)))
+    }
+
+    @Test func labelsThatCollideAcrossSectionsAreDropped() throws {
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.example.docs", name: "Docs")),
+        ], others: [
+            .folder(FolderItem(path: "/Users/me/Documents", label: "Docs")),
+            .folder(FolderItem(path: "/Users/me/Other", label: "com.example.docs")),
+            .folder(FolderItem(path: "/Users/me/Fine")),
+        ])
+
+        let result = try sanitize(profile)
+
+        #expect(result.profile.others == [.folder(FolderItem(path: "/Users/me/Fine"))])
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .duplicateLabel)))
+        #expect(result.changes.contains(.droppedItem(.others, index: 1, reason: .labelCollision)))
+    }
+
+    @Test func namesShortenedToNothingDropTheirPathlessApps() throws {
+        let heavy = "e" + String(repeating: "\u{0301}", count: 600)
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.example.a", name: heavy)),
+            .app(AppRef(bundleId: "com.example.b", name: heavy + "x")),
+            .app(AppRef(bundleId: "com.example.c", name: "Fine")),
+            .app(AppRef(bundleId: "com.example.d", name: "")),
+        ])
+
+        let result = try sanitize(profile)
+
+        #expect(result.profile.apps == [
+            .app(AppRef(bundleId: "com.example.c", name: "Fine")),
+            .app(AppRef(bundleId: "com.example.d", name: "")),
+        ])
+        #expect(result.changes.contains(.droppedItem(.apps, index: 0, reason: .emptyLabel)))
+        #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .emptyLabel)))
+    }
+
+    @Test func overlongBundleIdsAndPathsAreDroppedNotShortened() throws {
+        let long = String(repeating: "x", count: Profile.maxImportTextLength + 1)
+        let longPath = "/Users/me/" + String(repeating: "p", count: Profile.maxImportLocationLength)
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: long, name: "A")),
+            .app(AppRef(bundleId: "com.example.b", name: "B", path: longPath)),
+        ], others: [.folder(FolderItem(path: longPath))])
+
+        let result = try sanitize(profile)
+
+        #expect(result.profile.apps == [.app(AppRef(bundleId: "com.example.b", name: "B"))])
+        #expect(result.profile.others.isEmpty)
+        #expect(result.changes.contains(.droppedItem(.apps, index: 0, reason: .stringTooLong)))
+        #expect(result.changes.contains(.clearedAppPath(.apps, index: 1)))
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .stringTooLong)))
+    }
+
+    @Test func profileWhoseEveryTileIsDroppedThrows() throws {
+        let profile = Profile(name: "P", apps: [
+            .unknown(UnknownTile(tileType: "recents-tile")),
+        ], others: [
+            .folder(FolderItem(path: "/etc")),
+        ])
+
+        do {
+            _ = try sanitize(profile)
+            Issue.record("Expected everyTileDropped")
+        } catch {
+            guard let error = error as? ImportSanitizationError, case let .everyTileDropped(changes) = error else {
+                Issue.record("Expected everyTileDropped, got \(error)")
+                return
+            }
+            #expect(changes.contains(.droppedItem(.apps, index: 0, reason: .unknownTile)))
+            #expect(changes.contains(.droppedItem(.others, index: 0, reason: .disallowedPath)))
+        }
+    }
+
+    @Test func emptyProfileIsStillSanitized() throws {
+        let result = try sanitize(Profile(name: "P"))
+        #expect(result.profile.apps.isEmpty && result.profile.others.isEmpty)
     }
 }

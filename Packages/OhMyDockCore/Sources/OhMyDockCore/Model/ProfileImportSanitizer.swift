@@ -16,6 +16,12 @@ public enum ImportSanitizationChange: Hashable, Sendable {
         case stringTooLong
         /// Dockutil refuses a second tile with the same label.
         case duplicateLabel
+        /// The tile's label, name, bundle id, path or URL equals one of another tile's, so dockutil
+        /// would refuse to add it or could not tell the two apart (typically after a string was
+        /// shortened to fit the cap).
+        case labelCollision
+        /// Shortening the name left a pathless app with no label at all.
+        case emptyLabel
     }
 
     case droppedItem(DockSection, index: Int, reason: DropReason)
@@ -33,6 +39,9 @@ public enum ImportSanitizationChange: Hashable, Sendable {
 public enum ImportSanitizationError: Error, Hashable, Sendable {
     /// What is left after sanitizing is still not a valid profile (empty name, bad prefs, ...).
     case invalidProfile(ProfileValidationError)
+    /// The profile had tiles, and every one of them was dropped. Applying the result would empty
+    /// the Dock, so it is not returned. `changes` says why each tile went.
+    case everyTileDropped(changes: [ImportSanitizationChange])
 }
 
 public struct SanitizedProfile: Equatable, Sendable {
@@ -69,8 +78,15 @@ extension Profile {
     /// resolved home). Length caps apply to characters
     /// and to UTF-8 bytes (4 per allowed character).
     ///
+    /// - Tiles that dockutil could not tell apart are dropped (`labelCollision`, `duplicateLabel`):
+    ///   one whose label equals another tile's label, name, bundle id, path or URL. When a
+    ///   shortened string is involved, the shortened tile goes; otherwise the later one. A
+    ///   pathless app whose name was shortened to nothing is dropped (`emptyLabel`). Bundle ids
+    ///   and paths are never shortened, only dropped (or, for an app path hint, cleared).
+    ///
     /// - Throws: `ImportSanitizationError.invalidProfile` when the result still fails
-    ///   `validate()`.
+    ///   `validate()`, and `ImportSanitizationError.everyTileDropped` when the profile had tiles
+    ///   and none is left, so a caller cannot apply the result and silently wipe the Dock.
     public func sanitizedForImport(
         homeDirectory: URL = FileManager.default.homeDirectoryForCurrentUser
     ) throws(ImportSanitizationError) -> SanitizedProfile {
@@ -101,8 +117,13 @@ private struct ProfileImportSanitizer {
         changes.append(.idReassigned)
 
         profile.name = truncated(profile.name, to: Profile.maxNameLength, field: "name")
-        profile.apps = sanitize(input.apps, in: .apps)
-        profile.others = sanitize(input.others, in: .others)
+        var candidates = sanitizeItems(input.apps, in: .apps) + sanitizeItems(input.others, in: .others)
+        dropCollisions(&candidates)
+        profile.apps = capped(candidates, in: .apps)
+        profile.others = capped(candidates, in: .others)
+        if !(input.apps + input.others).isEmpty, profile.apps.isEmpty, profile.others.isEmpty {
+            throw .everyTileDropped(changes: changes)
+        }
 
         if profile.switching.quitScope != .none {
             changes.append(.forcedQuitScopeNone(was: profile.switching.quitScope))
@@ -121,30 +142,65 @@ private struct ProfileImportSanitizer {
         return SanitizedProfile(profile: profile, changes: changes)
     }
 
-    private mutating func sanitize(_ items: [DockItem], in section: DockSection) -> [DockItem] {
-        var kept: [DockItem] = []
-        var labels: Set<String> = []
-        var overLimit = 0
+    private struct Candidate {
+        var item: DockItem
+        var section: DockSection
+        /// Position in the profile as it was handed in.
+        var index: Int
+        /// A label, name or similar string was shortened.
+        var truncated: Bool
+        var dropped = false
+    }
 
+    private mutating func sanitizeItems(_ items: [DockItem], in section: DockSection) -> [Candidate] {
+        var result: [Candidate] = []
         for (index, item) in items.enumerated() {
+            let before = changes.count
             guard let clean = sanitize(item, in: section, at: index) else { continue }
-            if !clean.isSpacer {
-                let label = DockutilPlanner.computedLabel(of: clean)
-                if !label.isEmpty, !labels.insert(label).inserted {
-                    changes.append(.droppedItem(section, index: index, reason: .duplicateLabel))
-                    continue
-                }
-            }
-            if kept.count >= Profile.maxImportItemsPerSection {
-                overLimit += 1
+            let truncated = changes[before...].contains { if case .truncatedString = $0 { true } else { false } }
+            if truncated, case .app = clean, DockutilPlanner.computedLabel(of: clean).isEmpty {
+                changes.append(.droppedItem(section, index: index, reason: .emptyLabel))
                 continue
             }
-            kept.append(clean)
+            result.append(Candidate(item: clean, section: section, index: index, truncated: truncated))
         }
-        if overLimit > 0 {
-            changes.append(.droppedItemsOverLimit(section, dropped: overLimit))
+        return result
+    }
+
+    /// Drops tiles dockutil would refuse or could not address, judged the way
+    /// `DockutilPlanner.wouldReject` does: the label a tile would get against the strings that
+    /// match the other tile. Both directions count, since the Dock may be built in any order. If a
+    /// shortened string is involved, any key in common counts, because a shortened string that
+    /// equals another tile's bundle id or path is exactly the collision to prevent.
+    private mutating func dropCollisions(_ candidates: inout [Candidate]) {
+        let keys = candidates.map { DockutilPlanner.matchKeys(of: $0.item) }
+        let labels = candidates.map { DockutilPlanner.computedLabel(of: $0.item) }
+        for later in candidates.indices where !candidates[later].item.isSpacer {
+            for earlier in candidates.indices where earlier < later && !candidates[earlier].item.isSpacer {
+                guard !candidates[later].dropped, !candidates[earlier].dropped else { continue }
+                let strict = candidates[later].truncated || candidates[earlier].truncated
+                let collides = strict
+                    ? !keys[later].isDisjoint(with: keys[earlier])
+                    : (!labels[later].isEmpty && keys[earlier].contains(labels[later]))
+                        || (!labels[earlier].isEmpty && keys[later].contains(labels[earlier]))
+                guard collides else { continue }
+                let victim = candidates[earlier].truncated && !candidates[later].truncated ? earlier : later
+                candidates[victim].dropped = true
+                changes.append(.droppedItem(
+                    candidates[victim].section,
+                    index: candidates[victim].index,
+                    reason: labels[earlier] == labels[later] ? .duplicateLabel : .labelCollision
+                ))
+            }
         }
-        return kept
+    }
+
+    private mutating func capped(_ candidates: [Candidate], in section: DockSection) -> [DockItem] {
+        let kept = candidates.filter { $0.section == section && !$0.dropped }.map(\.item)
+        if kept.count > Profile.maxImportItemsPerSection {
+            changes.append(.droppedItemsOverLimit(section, dropped: kept.count - Profile.maxImportItemsPerSection))
+        }
+        return Array(kept.prefix(Profile.maxImportItemsPerSection))
     }
 
     private mutating func sanitize(_ item: DockItem, in section: DockSection, at index: Int) -> DockItem? {
