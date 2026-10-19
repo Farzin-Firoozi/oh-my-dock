@@ -92,9 +92,10 @@ public struct PrefsDiff: Hashable, Sendable {
         public var key: DockPrefs.Key
         /// Current domain value, or `nil` when the key is absent.
         public var current: DockPrefs.Value?
-        public var target: DockPrefs.Value
+        /// The value to write, or `nil` to remove the key so macOS uses its default.
+        public var target: DockPrefs.Value?
 
-        public init(key: DockPrefs.Key, current: DockPrefs.Value?, target: DockPrefs.Value) {
+        public init(key: DockPrefs.Key, current: DockPrefs.Value?, target: DockPrefs.Value?) {
             self.key = key
             self.current = current
             self.target = target
@@ -135,7 +136,7 @@ public struct DockPrefsApplyResult: Equatable, Sendable {
 public enum DockPrefsWriterError: Error, Equatable, Sendable {
     case prefsChanged
     case validation(DockPrefsValidationError)
-    case verificationFailed(key: DockPrefs.Key, expected: DockPrefs.Value, actual: DockPrefs.Value?)
+    case verificationFailed(key: DockPrefs.Key, expected: DockPrefs.Value?, actual: DockPrefs.Value?)
     case unreadableValue(key: DockPrefs.Key)
     case invalidEnumValue(key: DockPrefs.Key, raw: String)
 }
@@ -200,11 +201,21 @@ public struct DockPrefsWriter: DockPrefsWriting {
         return DockPrefsCapture(values: values)
     }
 
-    /// Entries for keys set in `target` whose value would differ from `current`.
+    /// Entries for keys set or reset in `target` whose value would differ from `current`. A reset
+    /// key has a `nil` target and appears only while the domain holds a value for it.
     public func diff(current: DockPrefsCapture, target: DockPrefs) throws -> PrefsDiff {
         try validate(target)
+        let planned = target.values
         var entries: [PrefsDiff.Entry] = []
-        for (key, targetValue) in target.values.sorted(by: { $0.key.rawValue < $1.key.rawValue }) {
+        for key in DockPrefs.Key.allCases.sorted(by: { $0.rawValue < $1.rawValue }) {
+            let targetValue: DockPrefs.Value?
+            if let value = planned[key] {
+                targetValue = value
+            } else if target.resetKeys.contains(key) {
+                targetValue = nil
+            } else {
+                continue
+            }
             let currentValue = current[key]
             if currentValue != targetValue {
                 entries.append(PrefsDiff.Entry(key: key, current: currentValue, target: targetValue))
@@ -213,7 +224,7 @@ public struct DockPrefsWriter: DockPrefsWriting {
         return PrefsDiff(entries: entries)
     }
 
-    /// Applies non-`nil` fields in `target`. Validates ranges, optionally refuses when the domain
+    /// Applies non-`nil` fields in `target` and removes its `resetKeys` from the domain. Validates ranges, optionally refuses when the domain
     /// changed since `expecting`, verifies every write by re-reading, and returns rollback data.
     public func apply(_ target: DockPrefs, expecting baseline: DockPrefsCapture?) throws -> DockPrefsApplyResult {
         try validate(target)
@@ -223,7 +234,9 @@ public struct DockPrefsWriter: DockPrefsWriting {
             throw DockPrefsWriterError.prefsChanged
         }
 
-        let planned = target.values
+        // A reset key plans `nil`: the write removes it and verification expects it absent.
+        var planned: [DockPrefs.Key: DockPrefs.Value?] = target.values.mapValues { $0 }
+        for key in target.resetKeys { planned[key] = .some(nil) }
         guard !planned.isEmpty else {
             return DockPrefsApplyResult(
                 changedKeys: [],
@@ -239,7 +252,7 @@ public struct DockPrefsWriter: DockPrefsWriting {
             let prior = before[key]
             if prior == targetValue { continue }
             rollback[key] = prior
-            domainIO.setValue(plistValue(for: targetValue), forKey: key.defaultsKey)
+            domainIO.setValue(targetValue.map { plistValue(for: $0) }, forKey: key.defaultsKey)
             changed.append(key)
         }
 

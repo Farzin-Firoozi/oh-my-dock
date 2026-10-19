@@ -120,6 +120,79 @@ import Testing
         #expect(error == .verificationFailed(key: .tileSize, expected: .double(48), actual: .double(41)))
     }
 
+    // MARK: - Reset to system default
+
+    @Test func resetKeyRemovesItFromTheDomainAndVerifiesAbsence() throws {
+        let (writer, io) = writer(with: ["tilesize": 64, "autohide": true, "foreign-key": "keep"])
+        let baseline = try writer.captureCurrent()
+        let result = try writer.apply(DockPrefs(resetKeys: [.tileSize, .largeSize]), expecting: baseline)
+        // largesize was already absent: nothing to change for it.
+        #expect(result.changedKeys == [.tileSize])
+        #expect(result.needsDockRestart)
+        #expect(io.value(forKey: "tilesize") == nil)
+        #expect(io.value(forKey: "autohide") as? Bool == true)
+        #expect(io.value(forKey: "foreign-key") as? String == "keep")
+        #expect(try writer.captureCurrent()[.tileSize] == nil)
+    }
+
+    @Test func resetAndSetKeysApplyTogether() throws {
+        let (writer, io) = writer(with: ["tilesize": 64, "autohide": true])
+        let baseline = try writer.captureCurrent()
+        let result = try writer.apply(DockPrefs(autohide: false, resetKeys: [.tileSize]), expecting: baseline)
+        #expect(result.changedKeys == [.autohide, .tileSize])
+        #expect(io.value(forKey: "autohide") as? Bool == false)
+        #expect(io.value(forKey: "tilesize") == nil)
+    }
+
+    @Test func resettingAbsentKeysIsANoOp() throws {
+        let (writer, _) = writer(with: [:])
+        let baseline = try writer.captureCurrent()
+        let result = try writer.apply(DockPrefs.allSystemDefaults, expecting: baseline)
+        #expect(result.changedKeys.isEmpty)
+        #expect(!result.needsDockRestart)
+    }
+
+    @Test func rollbackRestoresAResetKey() throws {
+        let (writer, io) = writer(with: ["tilesize": 64, "orientation": "left"])
+        let baseline = try writer.captureCurrent()
+        let result = try writer.apply(DockPrefs.allSystemDefaults, expecting: baseline)
+        #expect(io.value(forKey: "tilesize") == nil)
+        #expect(result.rollbackImage.previousValues == [.tileSize: .double(64), .orientation: .string("left")])
+        try writer.rollback(result.rollbackImage)
+        #expect(io.value(forKey: "tilesize") as? Double == 64)
+        #expect(io.value(forKey: "orientation") as? String == "left")
+        #expect(try writer.holds(result.rollbackImage))
+    }
+
+    @Test func resetVerificationFailsWhenKeyReappears() throws {
+        let io = VerifyingFailDockPrefsDomainIO(base: ["tilesize": 40], corruptAfterWrite: ["tilesize": 41])
+        let writer = DockPrefsWriter(domainIO: io)
+        let baseline = try writer.captureCurrent()
+        let error = #expect(throws: DockPrefsWriterError.self) {
+            try writer.apply(DockPrefs(resetKeys: [.tileSize]), expecting: baseline)
+        }
+        #expect(error == .verificationFailed(key: .tileSize, expected: nil, actual: .double(41)))
+    }
+
+    @Test func diffShowsResetAsNilTargetOnlyWhenKeyIsPresent() throws {
+        let (writer, _) = writer()
+        let current = DockPrefsCapture(values: [.tileSize: .double(48), .autohide: .bool(true)])
+        let diff = try writer.diff(
+            current: current,
+            target: DockPrefs(orientation: .left, resetKeys: [.tileSize, .largeSize])
+        )
+        #expect(diff.entries.map(\.key) == [DockPrefs.Key.orientation, .tileSize])
+        #expect(diff.entries[1].current == DockPrefs.Value.double(48))
+        #expect(diff.entries[1].target == nil)
+    }
+
+    @Test func conflictingResetIsRejectedByTheWriter() {
+        let (writer, _) = writer()
+        #expect(throws: DockPrefsWriterError.validation(.conflictingReset(.tileSize))) {
+            try writer.apply(DockPrefs(tileSize: 40, resetKeys: [.tileSize]), expecting: nil)
+        }
+    }
+
     @Test func foreignKeysPreservedOnApply() throws {
         let (writer, io) = writer(with: [
             "persistent-apps": ["tile"],

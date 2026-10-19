@@ -77,4 +77,57 @@ import Testing
     @Test func nanIsRejected() {
         #expect(throws: DockPrefsValidationError.self) { try DockPrefs(tileSize: .nan).validate() }
     }
+
+    // MARK: - Reset to system default
+
+    @Test func resetKeysCountAsContentButNotAsValues() {
+        let prefs = DockPrefs(resetKeys: [.tileSize])
+        #expect(!prefs.isEmpty)
+        #expect(prefs.values.isEmpty)
+        #expect(DockPrefs.allSystemDefaults.resetKeys == Set(DockPrefs.Key.allCases))
+    }
+
+    @Test func resetKeysRoundTripAsSortedArray() throws {
+        let prefs = DockPrefs(autohide: true, resetKeys: [.tileSize, .largeSize])
+        let json = try ModelTestSupport.jsonObject(prefs)
+        #expect(json["resetToSystemDefault"] as? [String] == ["largeSize", "tileSize"])
+        #expect(json["autohide"] as? Bool == true)
+        #expect(try ModelTestSupport.roundTrip(prefs) == prefs)
+    }
+
+    @Test func emptyResetKeysAreOmittedFromJSON() throws {
+        let json = try ModelTestSupport.jsonObject(DockPrefs(tileSize: 40))
+        #expect(json["resetToSystemDefault"] == nil)
+    }
+
+    @Test func oldJSONWithoutResetKeysStillDecodes() throws {
+        let prefs = try ModelTestSupport.decode(DockPrefs.self, #"{"tileSize": 40, "autohide": false}"#)
+        #expect(prefs == DockPrefs(tileSize: 40, autohide: false))
+        #expect(prefs.resetKeys.isEmpty)
+    }
+
+    @Test func unknownResetKeyIsRejected() {
+        #expect(throws: DecodingError.self) {
+            try ModelTestSupport.decode(DockPrefs.self, #"{"resetToSystemDefault": ["nope"]}"#)
+        }
+    }
+
+    @Test func keyBothSetAndResetIsRejected() {
+        #expect(throws: DecodingError.self) {
+            try ModelTestSupport.decode(DockPrefs.self, #"{"tileSize": 40, "resetToSystemDefault": ["tileSize"]}"#)
+        }
+        #expect(throws: DockPrefsValidationError.conflictingReset(.tileSize)) {
+            try DockPrefs(tileSize: 40, resetKeys: [.tileSize]).validate()
+        }
+        #expect(throws: Never.self) {
+            try DockPrefs(tileSize: 40, resetKeys: [.largeSize]).validate()
+        }
+    }
+
+    @Test func profileValidationRejectsConflictingReset() {
+        let profile = Profile(name: "P", prefs: DockPrefs(autohide: true, resetKeys: [.autohide]))
+        #expect(throws: ProfileValidationError.invalidPrefs(.conflictingReset(.autohide))) {
+            try profile.validate()
+        }
+    }
 }

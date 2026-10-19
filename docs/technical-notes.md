@@ -35,6 +35,8 @@ Write rules (from [spike 0.4](spikes/0.4-dockutil-temp-plist.md) source review o
 
 Preferences are written via `defaults write com.apple.dock <key>` (or `CFPreferencesSetAppValue` + `CFPreferencesAppSynchronize`).
 
+**Reset to system default.** `DockPrefs.resetKeys` (JSON `resetToSystemDefault`: array of key names, omitted when empty, old files decode unchanged) lists keys that applying removes from the domain, so macOS uses its own value; no default number is ever invented. A key is either set or reset (`conflictingReset` on validate and decode). The writer removes the key, verifies it is absent, and records the old value in the rollback pre-image. A `PrefsDiff.Entry` with `target == nil` is a reset (diff preview: “System default”); it appears only while the domain holds a value for that key. The panel's slider/toggle positions for keys without a value come from `DockPrefs.displayDefaults`, which is display-only.
+
 ## Apply and restore
 
 - **Apply flow** (`ProfileApplier`):
@@ -64,7 +66,7 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 - The script starts with `#!/bin/sh` and `set -eu`. If `dockutil` is not on `PATH`, it prints `brew install dockutil` and exits.
 - Then `dockutil --remove all --no-restart`, then one `--add` per tile (apps, then others). Each add passes `--section` and a 1-based `--position` within that section. Folders also pass `--view`, `--display`, and `--sort`. Labels use `--label=` (so a value that starts with `-` is not another flag). Spacers use dockutil's spacer type and the sentinel label `oh-my-dock-spacer`. Every dockutil invocation includes `--no-restart`.
-- When the profile has `prefs`, each set key is one `defaults write com.apple.dock <defaults key>` line (`-bool`, `-float`, or `-string`). `nil` prefs omit the block. An empty prefs object writes nothing.
+- When the profile has `prefs`, each set key is one `defaults write com.apple.dock <defaults key>` line (`-bool`, `-float`, or `-string`). Each reset key is `defaults delete com.apple.dock <key> 2>/dev/null || true` (tolerant of an absent key under `set -e`). `nil` prefs omit the block. An empty prefs object writes nothing.
 - The script ends with a single `killall Dock`. Switching options and hotkeys are not Dock contents, so they are not in the script.
 - Every profile value is single-quoted (`'` → `'\''`). `$()`, backticks, newlines, quotes, spaces, and unicode stay data. A path under the home directory passed to `export` is written as `"$HOME"` plus a single-quoted suffix, never as that machine's home path (`/Users/mehack` is not under `/Users/me`). The suffix stays outside the double quotes, where `$()` would run.
 - The header comment carries the profile name and `OhMyDockCore.version`. The name is newline-stripped (including Unicode line separators) and single-quoted, so it cannot leave the comment.

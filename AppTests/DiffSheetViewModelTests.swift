@@ -54,6 +54,7 @@ import Testing
             prefsDiff: PrefsDiff(entries: [
                 .init(key: .tileSize, current: .double(48), target: .double(64)),
                 .init(key: .autohide, current: nil, target: .bool(true)),
+                .init(key: .largeSize, current: .double(96), target: nil),
             ]),
             switchPlan: SwitchPlan(
                 scope: .previousProfileApps,
@@ -63,10 +64,11 @@ import Testing
         )
         let model = DiffSheetViewModel(preview: preview)
 
-        #expect(model.prefs.map(\.name) == ["Icon size", "Automatically hide"])
-        #expect(model.prefs.map(\.target) == ["64", "On"])
+        #expect(model.prefs.map(\.name) == ["Icon size", "Automatically hide", "Magnified size"])
+        #expect(model.prefs.map(\.target) == ["64", "On", "System default"])
         #expect(model.prefs.first?.current == "48")
-        #expect(model.prefs.last?.current == "Default")
+        #expect(model.prefs[1].current == "Default")
+        #expect(model.prefs.last?.current == "96")
         #expect(model.apps.map(\.name) == ["Slack", "Figma"])
         #expect(model.apps.map(\.action) == [.quit, .open])
         #expect(model.hasChanges)

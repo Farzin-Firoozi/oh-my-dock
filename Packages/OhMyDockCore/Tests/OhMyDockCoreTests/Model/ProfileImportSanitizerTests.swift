@@ -237,6 +237,16 @@ import Testing
         #expect(throws: ImportSanitizationError.self) { try sanitize(profile) }
     }
 
+    @Test func resetKeysSurviveImportAndConflictsThrow() throws {
+        let kept = try sanitize(Profile(name: "P", prefs: DockPrefs(autohide: true, resetKeys: [.tileSize])))
+        #expect(kept.profile.prefs == DockPrefs(autohide: true, resetKeys: [.tileSize]))
+
+        let conflicting = Profile(name: "P", prefs: DockPrefs(tileSize: 40, resetKeys: [.tileSize]))
+        #expect(throws: ImportSanitizationError.invalidProfile(.invalidPrefs(.conflictingReset(.tileSize)))) {
+            try sanitize(conflicting)
+        }
+    }
+
     @Test func inputIsNotMutatedAndIDIsFreshEachTime() throws {
         let original = Profile(name: "P", switching: SwitchingOptions(quitScope: .allNotInProfile))
         let a = try sanitize(original)

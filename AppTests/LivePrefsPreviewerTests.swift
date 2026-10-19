@@ -62,6 +62,18 @@ private actor CountingRestarter: DockRestarting {
         #expect(domain.value(forKey: "magnification") == nil)
     }
 
+    @Test func resetPreviewRemovesKeysAndRevertPutsThemBack() async throws {
+        let (previewer, domain, restarter, _, root) = try rig(initial: ["tilesize": 80.0, "autohide": true])
+        defer { try? FileManager.default.removeItem(at: root) }
+        let session = try #require(try await previewer.begin(DockPrefs(resetKeys: [.tileSize, .largeSize])))
+        #expect(domain.value(forKey: "tilesize") == nil)
+        #expect(domain.value(forKey: "autohide") as? Bool == true)
+        #expect(session.changedKeys == [.tileSize])
+        #expect(await restarter.count == 1)
+        try await previewer.revert(session)
+        #expect(domain.value(forKey: "tilesize") as? Double == 80)
+    }
+
     @Test func nothingToChangeReturnsNilWithoutSnapshotOrRestart() async throws {
         let (previewer, _, restarter, snapshots, root) = try rig(initial: ["tilesize": 48.0])
         defer { try? FileManager.default.removeItem(at: root) }

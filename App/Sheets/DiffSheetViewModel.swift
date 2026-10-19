@@ -427,7 +427,7 @@ public final class DiffSheetViewModel {
                 id: "pref-\(entry.key.rawValue)",
                 name: Self.title(of: entry.key),
                 current: entry.current.map(Self.text(of:)) ?? "Default",
-                target: Self.text(of: entry.target)
+                target: entry.target.map(Self.text(of:)) ?? "System default"
             )
         }
         let plan = preview.switchPlan

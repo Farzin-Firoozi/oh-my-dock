@@ -4,6 +4,8 @@ import SwiftUI
 /// Grouped form for the selected profile's Dock preferences, with capture, reset and live preview.
 struct PrefsPanelView: View {
     @Bindable var panel: PrefsPanelViewModel
+    /// Where controls sit for a key with no value. Display only, never saved.
+    private let shown = DockPrefs.displayDefaults
 
     var body: some View {
         Form {
@@ -37,14 +39,15 @@ struct PrefsPanelView: View {
         Section("Size") {
             PrefSlider(
                 title: "Icon size", help: "Size of Dock icons.",
-                value: prefs.tileSize ?? 48, range: DockPrefs.Key.tileSize.allowedRange!, step: 1,
+                value: prefs.tileSize ?? shown.tileSize!, isSystemDefault: prefs.resetKeys.contains(.tileSize), range: DockPrefs.Key.tileSize.allowedRange!, step: 1,
                 format: { "\(Int($0)) pt" }
             ) { panel.set(\.tileSize, to: $0) }
-            Toggle("Magnification", isOn: flag(\.magnification, prefs.magnification ?? false))
+            Toggle("Magnification", isOn: flag(\.magnification, prefs.magnification ?? shown.magnification!))
+                .systemDefaultNote(prefs.resetKeys.contains(.magnification))
                 .help("Enlarge icons under the pointer.")
             PrefSlider(
                 title: "Magnified size", help: "Icon size under the pointer when magnification is on.",
-                value: prefs.largeSize ?? 128, range: DockPrefs.Key.largeSize.allowedRange!, step: 1,
+                value: prefs.largeSize ?? shown.largeSize!, isSystemDefault: prefs.resetKeys.contains(.largeSize), range: DockPrefs.Key.largeSize.allowedRange!, step: 1,
                 format: { "\(Int($0)) pt" }
             ) { panel.set(\.largeSize, to: $0) }
             .disabled(prefs.magnification != true)
@@ -54,7 +57,7 @@ struct PrefsPanelView: View {
     private func positionSection(_ prefs: DockPrefs) -> some View {
         Section("Position & Hiding") {
             Picker("Position on screen", selection: Binding(
-                get: { prefs.orientation ?? .bottom },
+                get: { prefs.orientation ?? shown.orientation! },
                 set: { panel.set(\.orientation, to: $0) }
             )) {
                 Text("Left").tag(DockPrefs.Orientation.left)
@@ -62,16 +65,18 @@ struct PrefsPanelView: View {
                 Text("Right").tag(DockPrefs.Orientation.right)
             }
             .pickerStyle(.segmented)
-            Toggle("Automatically hide and show the Dock", isOn: flag(\.autohide, prefs.autohide ?? false))
+            .systemDefaultNote(prefs.resetKeys.contains(.orientation))
+            Toggle("Automatically hide and show the Dock", isOn: flag(\.autohide, prefs.autohide ?? shown.autohide!))
+                .systemDefaultNote(prefs.resetKeys.contains(.autohide))
             Group {
                 PrefSlider(
                     title: "Show delay", help: "How long the pointer rests at the edge before the Dock appears.",
-                    value: prefs.autohideDelay ?? 0.5, range: DockPrefs.Key.autohideDelay.allowedRange!, step: 0.05,
+                    value: prefs.autohideDelay ?? shown.autohideDelay!, isSystemDefault: prefs.resetKeys.contains(.autohideDelay), range: DockPrefs.Key.autohideDelay.allowedRange!, step: 0.05,
                     format: { $0.formatted(.number.precision(.fractionLength(2))) + " s" }
                 ) { panel.set(\.autohideDelay, to: $0) }
                 PrefSlider(
                     title: "Animation time", help: "How long the Dock takes to slide in and out. Lower is faster.",
-                    value: prefs.autohideTimeModifier ?? 0.5, range: DockPrefs.Key.autohideTimeModifier.allowedRange!, step: 0.05,
+                    value: prefs.autohideTimeModifier ?? shown.autohideTimeModifier!, isSystemDefault: prefs.resetKeys.contains(.autohideTimeModifier), range: DockPrefs.Key.autohideTimeModifier.allowedRange!, step: 0.05,
                     format: { $0.formatted(.number.precision(.fractionLength(2))) + " s" }
                 ) { panel.set(\.autohideTimeModifier, to: $0) }
             }
@@ -82,20 +87,27 @@ struct PrefsPanelView: View {
     private func behaviorSection(_ prefs: DockPrefs) -> some View {
         Section("Behavior") {
             Picker("Minimize windows using", selection: Binding(
-                get: { prefs.minimizeEffect ?? .genie },
+                get: { prefs.minimizeEffect ?? shown.minimizeEffect! },
                 set: { panel.set(\.minimizeEffect, to: $0) }
             )) {
                 Text("Genie effect").tag(DockPrefs.MinimizeEffect.genie)
                 Text("Scale effect").tag(DockPrefs.MinimizeEffect.scale)
                 Text("Suck effect").tag(DockPrefs.MinimizeEffect.suck)
             }
-            Toggle("Minimize windows into application icon", isOn: flag(\.minimizeToApplication, prefs.minimizeToApplication ?? false))
-            Toggle("Animate opening applications", isOn: flag(\.launchAnimation, prefs.launchAnimation ?? true))
-            Toggle("Show indicators for open applications", isOn: flag(\.showProcessIndicators, prefs.showProcessIndicators ?? true))
-            Toggle("Show suggested and recent apps", isOn: flag(\.showRecents, prefs.showRecents ?? true))
-            Toggle("Show only running applications", isOn: flag(\.staticOnly, prefs.staticOnly ?? false))
+            .systemDefaultNote(prefs.resetKeys.contains(.minimizeEffect))
+            Toggle("Minimize windows into application icon", isOn: flag(\.minimizeToApplication, prefs.minimizeToApplication ?? shown.minimizeToApplication!))
+                .systemDefaultNote(prefs.resetKeys.contains(.minimizeToApplication))
+            Toggle("Animate opening applications", isOn: flag(\.launchAnimation, prefs.launchAnimation ?? shown.launchAnimation!))
+                .systemDefaultNote(prefs.resetKeys.contains(.launchAnimation))
+            Toggle("Show indicators for open applications", isOn: flag(\.showProcessIndicators, prefs.showProcessIndicators ?? shown.showProcessIndicators!))
+                .systemDefaultNote(prefs.resetKeys.contains(.showProcessIndicators))
+            Toggle("Show suggested and recent apps", isOn: flag(\.showRecents, prefs.showRecents ?? shown.showRecents!))
+                .systemDefaultNote(prefs.resetKeys.contains(.showRecents))
+            Toggle("Show only running applications", isOn: flag(\.staticOnly, prefs.staticOnly ?? shown.staticOnly!))
+                .systemDefaultNote(prefs.resetKeys.contains(.staticOnly))
                 .help("Hides every icon that isn't open. Useful for presentations.")
-            Toggle("Scroll to open stacks and windows", isOn: flag(\.scrollToOpen, prefs.scrollToOpen ?? false))
+            Toggle("Scroll to open stacks and windows", isOn: flag(\.scrollToOpen, prefs.scrollToOpen ?? shown.scrollToOpen!))
+                .systemDefaultNote(prefs.resetKeys.contains(.scrollToOpen))
                 .help("Scrolling up over an icon opens its stack or shows its windows.")
         }
     }
@@ -107,7 +119,7 @@ struct PrefsPanelView: View {
                     .disabled(panel.isPreviewing)
                     .help("Replace these values with the ones your Dock uses right now.")
                 Button("Reset to Defaults", systemImage: "arrow.counterclockwise") { panel.resetToDefaults() }
-                    .help("Use macOS's default Dock settings.")
+                    .help("Remove these settings from the Dock so macOS uses its own defaults.")
                 Spacer()
                 Button(panel.isPreviewing ? "Update Preview" : "Preview on Dock", systemImage: "eye") {
                     Task { await panel.preview() }
@@ -137,6 +149,7 @@ private struct PrefSlider: View {
     let title: String
     let help: String
     let value: Double
+    var isSystemDefault = false
     let range: ClosedRange<Double>
     let step: Double
     let format: (Double) -> String
@@ -158,10 +171,10 @@ private struct PrefSlider: View {
                     }
                 }
                 .frame(minWidth: 140)
-                Text(format(draft ?? value))
+                Text(isSystemDefault && draft == nil ? "System default" : format(draft ?? value))
                     .monospacedDigit()
                     .foregroundStyle(.secondary)
-                    .frame(minWidth: 56, alignment: .trailing)
+                    .frame(minWidth: isSystemDefault ? 92 : 56, alignment: .trailing)
             }
         } label: {
             VStack(alignment: .leading, spacing: 2) {
@@ -170,6 +183,18 @@ private struct PrefSlider: View {
             }
         }
         .accessibilityElement(children: .contain)
+    }
+}
+
+private extension View {
+    /// Marks a control whose key is reset: applying the profile removes it from the Dock's domain.
+    func systemDefaultNote(_ isReset: Bool) -> some View {
+        VStack(alignment: .leading, spacing: 2) {
+            self
+            if isReset {
+                Text("System default").font(.caption).foregroundStyle(.secondary)
+            }
+        }
     }
 }
 

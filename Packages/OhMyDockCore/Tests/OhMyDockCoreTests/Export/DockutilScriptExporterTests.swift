@@ -68,6 +68,20 @@ import Testing
         #expect(!script.contains("defaults "))
     }
 
+    @Test func resetKeysEmitTolerantDefaultsDelete() throws {
+        let script = try export(Profile(
+            name: "Reset",
+            prefs: DockPrefs(autohide: true, resetKeys: [.tileSize, .minimizeEffect])
+        ))
+        let defaults = script.components(separatedBy: "\n").filter { $0.hasPrefix("defaults ") }
+        #expect(defaults == [
+            "defaults delete com.apple.dock tilesize 2>/dev/null || true",
+            "defaults write com.apple.dock autohide -bool 'true'",
+            "defaults delete com.apple.dock mineffect 2>/dev/null || true",
+        ])
+        try checkSyntax(script)
+    }
+
     @Test func writesEveryDockPref() throws {
         let script = try export(Profile(
             name: "Prefs",

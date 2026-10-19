@@ -104,11 +104,11 @@ private struct Rig {
         let rig = Rig()
         rig.panel.setManaged(true)
         #expect(rig.panel.isManaged)
-        // Captured keys win; absent ones fall back to Apple's defaults, so every control has a value.
+        // Captured keys win; keys the Dock doesn't store are reset to the system default, not guessed.
         #expect(rig.panel.prefs?.tileSize == 70)
         #expect(rig.panel.prefs?.autohide == true)
-        #expect(rig.panel.prefs?.minimizeEffect == .genie)
-        #expect(rig.panel.prefs?.values.count == DockPrefs.Key.allCases.count)
+        #expect(rig.panel.prefs?.minimizeEffect == nil)
+        #expect(rig.panel.prefs?.resetKeys == Set(DockPrefs.Key.allCases).subtracting([.tileSize, .autohide]))
 
         rig.panel.setManaged(false)
         #expect(rig.panel.prefs == nil)
@@ -116,16 +116,16 @@ private struct Rig {
         #expect(rig.saves.log.count == 2)
     }
 
-    @Test func togglingOnFallsBackToDefaultsWhenDockUnreadable() {
+    @Test func togglingOnResetsEverythingWhenDockUnreadable() {
         let rig = Rig()
         FakePreviewer.Flags.shared.failCapture = true
         rig.panel.setManaged(true)
-        #expect(rig.panel.prefs == .appleDefaults)
+        #expect(rig.panel.prefs == .allSystemDefaults)
         #expect(rig.panel.message?.kind == .error)
     }
 
     @Test func editsClampToValidRanges() {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         rig.panel.set(\.tileSize, to: 500)
         #expect(rig.panel.prefs?.tileSize == 128)
         rig.panel.set(\.tileSize, to: -3)
@@ -149,32 +149,45 @@ private struct Rig {
     }
 
     @Test func captureReplacesValuesWithTheDocks() {
-        let rig = Rig(prefs: .appleDefaults, live: DockPrefs(tileSize: 33, orientation: .left))
+        let rig = Rig(prefs: .displayDefaults, live: DockPrefs(tileSize: 33, orientation: .left))
         rig.panel.captureFromDock()
         #expect(rig.panel.prefs?.tileSize == 33)
         #expect(rig.panel.prefs?.orientation == .left)
-        #expect(rig.panel.prefs?.launchAnimation == true)
+        #expect(rig.panel.prefs?.launchAnimation == nil)
+        #expect(rig.panel.prefs?.resetKeys.contains(.launchAnimation) == true)
         #expect(rig.panel.message?.kind == .success)
     }
 
     @Test func captureFailureKeepsValuesAndReports() {
-        let rig = Rig(prefs: DockPrefs(tileSize: 20).filled())
+        let rig = Rig(prefs: DockPrefs(tileSize: 20))
         FakePreviewer.Flags.shared.failCapture = true
         rig.panel.captureFromDock()
         #expect(rig.panel.prefs?.tileSize == 20)
         #expect(rig.panel.message?.kind == .error)
     }
 
-    @Test func resetWritesAppleDefaults() {
-        let rig = Rig(prefs: DockPrefs(tileSize: 20, autohide: true).filled())
+    @Test func resetInventsNoNumbersAndMarksEveryKeyForRemoval() {
+        let rig = Rig(prefs: DockPrefs(tileSize: 20, autohide: true))
         rig.panel.resetToDefaults()
-        #expect(rig.panel.prefs == .appleDefaults)
-        #expect(rig.saves.log.last! == .appleDefaults)
-        #expect(throws: Never.self) { try DockPrefs.appleDefaults.validate() }
+        let saved = rig.saves.log.last!
+        #expect(rig.panel.prefs == .allSystemDefaults)
+        #expect(saved == .allSystemDefaults)
+        #expect(saved?.values.isEmpty == true)
+        #expect(saved?.resetKeys == Set(DockPrefs.Key.allCases))
+        #expect(throws: Never.self) { try saved?.validate() }
+    }
+
+    @Test func editingAResetKeyGivesItAValueAgain() {
+        let rig = Rig(prefs: .allSystemDefaults)
+        rig.panel.set(\.tileSize, to: 40)
+        #expect(rig.panel.prefs?.tileSize == 40)
+        #expect(rig.panel.prefs?.resetKeys.contains(.tileSize) == false)
+        #expect(rig.panel.prefs?.resetKeys.count == DockPrefs.Key.allCases.count - 1)
+        #expect(throws: Never.self) { try rig.panel.prefs?.validate() }
     }
 
     @Test func refusedSaveLeavesValuesUnchanged() {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         rig.saves.refuse = true
         rig.panel.set(\.tileSize, to: 20)
         #expect(rig.panel.prefs?.tileSize == 48)
@@ -182,12 +195,12 @@ private struct Rig {
     }
 
     @Test func previewAppliesOnlyPrefsAndRevertRestores() async {
-        let rig = Rig(prefs: DockPrefs.appleDefaults)
+        let rig = Rig(prefs: DockPrefs.displayDefaults)
         await rig.panel.preview()
         #expect(rig.panel.isPreviewing)
         #expect(rig.panel.previewedProfileName == "Work")
-        #expect(await rig.previewer.beginCalls == [.appleDefaults])
-        #expect(await rig.previewer.live == .appleDefaults)
+        #expect(await rig.previewer.beginCalls == [.displayDefaults])
+        #expect(await rig.previewer.live == .displayDefaults)
 
         #expect(await rig.panel.revert())
         #expect(!rig.panel.isPreviewing)
@@ -197,7 +210,7 @@ private struct Rig {
     }
 
     @Test func previewWhenDockAlreadyMatchesStartsNothing() async {
-        let live = DockPrefs.appleDefaults
+        let live = DockPrefs.displayDefaults
         let rig = Rig(prefs: live, live: live)
         await rig.panel.preview()
         #expect(!rig.panel.isPreviewing)
@@ -211,7 +224,7 @@ private struct Rig {
     }
 
     @Test func previewAgainRevertsFirstSoRevertTargetStaysOriginal() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.panel.preview()
         rig.panel.set(\.tileSize, to: 30)
         await rig.panel.preview()
@@ -221,7 +234,7 @@ private struct Rig {
     }
 
     @Test func previewFailureReportsAndLeavesNoPreview() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.previewer.configure(failBegin: true)
         await rig.panel.preview()
         #expect(!rig.panel.isPreviewing)
@@ -231,7 +244,7 @@ private struct Rig {
     }
 
     @Test func revertFailureKeepsPreviewSoItCanBeRetried() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.panel.preview()
         await rig.previewer.configure(failRevert: true)
         #expect(await rig.panel.revert() == false)
@@ -244,7 +257,7 @@ private struct Rig {
     }
 
     @Test func cancelOrCloseWithPreviewRevertsOnRequest() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.panel.preview()
         #expect(await rig.panel.resolvePreview(revert: true))
         #expect(!rig.panel.isPreviewing)
@@ -252,29 +265,29 @@ private struct Rig {
     }
 
     @Test func keepEndsPreviewWithoutReverting() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.panel.preview()
         #expect(await rig.panel.resolvePreview(revert: false))
         #expect(!rig.panel.isPreviewing)
         #expect(await rig.previewer.revertCalls == 0)
-        #expect(await rig.previewer.live == .appleDefaults)
+        #expect(await rig.previewer.live == .displayDefaults)
     }
 
     @Test func resolveWithoutPreviewIsANoOp() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         #expect(await rig.panel.resolvePreview(revert: true))
         #expect(await rig.previewer.revertCalls == 0)
     }
 
     @Test func captureIsRefusedWhileAPreviewIsOnTheDock() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.panel.preview()
         rig.panel.captureFromDock()
-        #expect(rig.panel.prefs == .appleDefaults)
+        #expect(rig.panel.prefs == .displayDefaults)
     }
 
     @Test func previewWaitsForAnotherDockOperation() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         let order = Order()
         let other = Task { @MainActor in
             await rig.gate.run("Applying a profile") {
@@ -294,7 +307,7 @@ private struct Rig {
     }
 
     @Test func previewAndRevertNeverOverlapOnTheDock() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.previewer.configure(delay: .milliseconds(30))
         await rig.panel.preview()
         async let a: Void = rig.panel.preview()
@@ -304,7 +317,7 @@ private struct Rig {
     }
 
     @Test func secondPreviewWhileOneIsRunningIsIgnored() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.previewer.configure(delay: .milliseconds(40))
         async let first: Void = rig.panel.preview()
         async let second: Void = rig.panel.preview()
@@ -313,7 +326,7 @@ private struct Rig {
     }
 
     @Test func bindingAnotherProfileKeepsAnActivePreview() async {
-        let rig = Rig(prefs: .appleDefaults)
+        let rig = Rig(prefs: .displayDefaults)
         await rig.panel.preview()
         rig.panel.bind(profileID: UUID(), name: "Home", prefs: nil)
         #expect(rig.panel.isPreviewing)

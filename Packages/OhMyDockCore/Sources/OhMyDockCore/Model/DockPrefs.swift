@@ -1,6 +1,8 @@
 import Foundation
 
 /// Per-profile Dock preferences (`com.apple.dock` domain). `nil` means leave the key unchanged.
+/// A key in `resetKeys` is removed from the domain on apply, so macOS falls back to its own
+/// default; no default value is ever invented. A key is either set or reset, never both.
 public struct DockPrefs: Codable, Hashable, Sendable {
     public static let domain = "com.apple.dock"
 
@@ -27,6 +29,11 @@ public struct DockPrefs: Codable, Hashable, Sendable {
     public var showProcessIndicators: Bool?
     public var launchAnimation: Bool?
     public var scrollToOpen: Bool?
+    /// Keys removed from the domain when applied (“reset to system default”).
+    public var resetKeys: Set<Key>
+
+    /// JSON key of `resetKeys`; omitted when empty.
+    static let resetKeysCodingKey = "resetToSystemDefault"
 
     public init(
         tileSize: Double? = nil,
@@ -42,7 +49,8 @@ public struct DockPrefs: Codable, Hashable, Sendable {
         minimizeToApplication: Bool? = nil,
         showProcessIndicators: Bool? = nil,
         launchAnimation: Bool? = nil,
-        scrollToOpen: Bool? = nil
+        scrollToOpen: Bool? = nil,
+        resetKeys: Set<Key> = []
     ) {
         self.tileSize = tileSize
         self.magnification = magnification
@@ -58,6 +66,12 @@ public struct DockPrefs: Codable, Hashable, Sendable {
         self.showProcessIndicators = showProcessIndicators
         self.launchAnimation = launchAnimation
         self.scrollToOpen = scrollToOpen
+        self.resetKeys = resetKeys
+    }
+
+    /// Every managed key reset to the system default.
+    public static var allSystemDefaults: DockPrefs {
+        DockPrefs(resetKeys: Set(Key.allCases))
     }
 
     /// One case per property. `rawValue` is the JSON key; `defaultsKey` is the
@@ -124,9 +138,10 @@ public struct DockPrefs: Codable, Hashable, Sendable {
         return result
     }
 
-    public var isEmpty: Bool { values.isEmpty }
+    public var isEmpty: Bool { values.isEmpty && resetKeys.isEmpty }
 
     public func validate() throws(DockPrefsValidationError) {
+        try validateNoConflict()
         let numeric: [(Key, Double?)] = [
             (.tileSize, tileSize),
             (.largeSize, largeSize),
@@ -141,7 +156,7 @@ public struct DockPrefs: Codable, Hashable, Sendable {
     }
 
     public init(from decoder: any Decoder) throws {
-        try decoder.rejectUnknownKeys(Key.self)
+        try decoder.rejectUnknownKeys(Key.self, alsoAllowing: [Self.resetKeysCodingKey])
         let c = try decoder.container(keyedBy: Key.self)
         tileSize = try c.decodeIfPresent(Double.self, forKey: .tileSize)
         magnification = try c.decodeIfPresent(Bool.self, forKey: .magnification)
@@ -157,6 +172,33 @@ public struct DockPrefs: Codable, Hashable, Sendable {
         showProcessIndicators = try c.decodeIfPresent(Bool.self, forKey: .showProcessIndicators)
         launchAnimation = try c.decodeIfPresent(Bool.self, forKey: .launchAnimation)
         scrollToOpen = try c.decodeIfPresent(Bool.self, forKey: .scrollToOpen)
+
+        let extra = try decoder.container(keyedBy: AnyCodingKey.self)
+        let resetField = AnyCodingKey(stringValue: Self.resetKeysCodingKey)
+        var resets: Set<Key> = []
+        for raw in try extra.decodeIfPresent([String].self, forKey: resetField) ?? [] {
+            guard let key = Key(rawValue: raw) else {
+                throw DecodingError.dataCorruptedError(
+                    forKey: resetField, in: extra, debugDescription: "Unknown Dock preference key “\(raw)”."
+                )
+            }
+            resets.insert(key)
+        }
+        resetKeys = resets
+        do {
+            try validateNoConflict()
+        } catch {
+            throw DecodingError.dataCorruptedError(
+                forKey: resetField, in: extra, debugDescription: "A key is both set and reset to the system default."
+            )
+        }
+    }
+
+    private func validateNoConflict() throws(DockPrefsValidationError) {
+        let values = values
+        if let key = Key.allCases.first(where: { resetKeys.contains($0) && values[$0] != nil }) {
+            throw .conflictingReset(key)
+        }
     }
 
     public func encode(to encoder: any Encoder) throws {
@@ -175,9 +217,18 @@ public struct DockPrefs: Codable, Hashable, Sendable {
         try c.encodeIfPresent(showProcessIndicators, forKey: .showProcessIndicators)
         try c.encodeIfPresent(launchAnimation, forKey: .launchAnimation)
         try c.encodeIfPresent(scrollToOpen, forKey: .scrollToOpen)
+        if !resetKeys.isEmpty {
+            var extra = encoder.container(keyedBy: AnyCodingKey.self)
+            try extra.encode(
+                resetKeys.map(\.rawValue).sorted(),
+                forKey: AnyCodingKey(stringValue: Self.resetKeysCodingKey)
+            )
+        }
     }
 }
 
 public enum DockPrefsValidationError: Error, Hashable, Sendable {
     case outOfRange(DockPrefs.Key, value: Double, allowed: ClosedRange<Double>)
+    /// The key is both set to a value and listed in `resetKeys`.
+    case conflictingReset(DockPrefs.Key)
 }

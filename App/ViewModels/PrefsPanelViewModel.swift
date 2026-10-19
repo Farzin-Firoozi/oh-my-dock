@@ -3,8 +3,9 @@ import Observation
 import OhMyDockCore
 
 extension DockPrefs {
-    /// What macOS uses for each key when none is set. “Reset to defaults” writes these.
-    static let appleDefaults = DockPrefs(
+    /// DISPLAY ONLY: where a control sits when its key is untouched (`nil`). These are never
+    /// written to the Dock or stored in a profile; “Reset to Defaults” removes keys instead.
+    static let displayDefaults = DockPrefs(
         tileSize: 48,
         magnification: false,
         largeSize: 128,
@@ -21,24 +22,19 @@ extension DockPrefs {
         scrollToOpen: false
     )
 
-    /// Every field set: those in `self` win, the rest come from `defaults`.
-    func filled(with defaults: DockPrefs = .appleDefaults) -> DockPrefs {
-        DockPrefs(
-            tileSize: tileSize ?? defaults.tileSize,
-            magnification: magnification ?? defaults.magnification,
-            largeSize: largeSize ?? defaults.largeSize,
-            orientation: orientation ?? defaults.orientation,
-            autohide: autohide ?? defaults.autohide,
-            autohideDelay: autohideDelay ?? defaults.autohideDelay,
-            autohideTimeModifier: autohideTimeModifier ?? defaults.autohideTimeModifier,
-            showRecents: showRecents ?? defaults.showRecents,
-            staticOnly: staticOnly ?? defaults.staticOnly,
-            minimizeEffect: minimizeEffect ?? defaults.minimizeEffect,
-            minimizeToApplication: minimizeToApplication ?? defaults.minimizeToApplication,
-            showProcessIndicators: showProcessIndicators ?? defaults.showProcessIndicators,
-            launchAnimation: launchAnimation ?? defaults.launchAnimation,
-            scrollToOpen: scrollToOpen ?? defaults.scrollToOpen
-        )
+    /// What the Dock holds: keys it stores keep their value, keys it doesn't store are reset to the
+    /// system default (no value is invented for them).
+    func resettingAbsentKeys() -> DockPrefs {
+        var copy = self
+        copy.resetKeys = Set(Key.allCases).subtracting(values.keys)
+        return copy
+    }
+
+    /// Drops a key from `resetKeys` once it has a value again.
+    func normalizingResets() -> DockPrefs {
+        var copy = self
+        copy.resetKeys.subtract(values.keys)
+        return copy
     }
 
     /// Numeric fields pulled into their allowed ranges (non-finite values become the lower bound).
@@ -119,11 +115,11 @@ final class PrefsPanelViewModel {
             commit(nil)
             return
         }
-        var seed = DockPrefs.appleDefaults
+        var seed = DockPrefs.allSystemDefaults
         do {
-            seed = try previewer.captureCurrent().filled()
+            seed = try previewer.captureCurrent().resettingAbsentKeys()
         } catch {
-            message = Message(kind: .error, text: "Couldn't read the Dock, so Apple's defaults were used: \(Self.describe(error))")
+            message = Message(kind: .error, text: "Couldn't read the Dock, so every setting was left at the system default: \(Self.describe(error))")
         }
         commit(seed)
     }
@@ -132,7 +128,7 @@ final class PrefsPanelViewModel {
     func update(_ edit: (inout DockPrefs) -> Void) {
         guard var next = prefs else { return }
         edit(&next)
-        commit(next.clamped())
+        commit(next.clamped().normalizingResets())
     }
 
     func set<Value>(_ keyPath: WritableKeyPath<DockPrefs, Value?>, to value: Value) {
@@ -142,17 +138,19 @@ final class PrefsPanelViewModel {
     func captureFromDock() {
         guard canEdit, !isPreviewing else { return }
         do {
-            // Keys the Dock doesn't store are at Apple's default, so fill them in.
-            commit(try previewer.captureCurrent().filled().clamped())
+            // Keys the Dock doesn't store are at the system default, so they stay reset.
+            commit(try previewer.captureCurrent().resettingAbsentKeys().clamped())
             message = Message(kind: .success, text: "Captured the current Dock preferences.")
         } catch {
             message = Message(kind: .error, text: "Couldn't read the Dock preferences: \(Self.describe(error))")
         }
     }
 
+    /// Resets every key to the system default: applying the profile removes them from the Dock's
+    /// domain and macOS uses its own values.
     func resetToDefaults() {
         guard canEdit else { return }
-        commit(.appleDefaults)
+        commit(.allSystemDefaults)
     }
 
     private func commit(_ next: DockPrefs?) {

@@ -113,8 +113,12 @@ public enum DockutilScriptExporter {
 
     private static func defaultsLines(for prefs: DockPrefs) -> [String] {
         DockPrefs.Key.allCases.compactMap { key in
-            guard let value = prefs.values[key] else { return nil }
-            return defaultsLine(key: key, value: value)
+            if let value = prefs.values[key] { return defaultsLine(key: key, value: value) }
+            // `defaults delete` fails on an absent key, which `set -e` would turn into an abort.
+            if prefs.resetKeys.contains(key) {
+                return "defaults delete com.apple.dock \(key.defaultsKey) 2>/dev/null || true"
+            }
+            return nil
         }
     }
 

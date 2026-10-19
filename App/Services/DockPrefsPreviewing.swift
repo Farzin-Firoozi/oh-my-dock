@@ -55,8 +55,8 @@ struct LivePrefsPreviewer: DockPrefsPreviewing {
             let result = try writer.apply(prefs, expecting: baseline)
             try await restarter.restart()
             let actual = try writer.captureCurrent()
-            for (key, expected) in prefs.values where actual[key] != expected {
-                throw DockPrefsWriterError.verificationFailed(key: key, expected: expected, actual: actual[key])
+            for entry in diff.entries where actual[entry.key] != entry.target {
+                throw DockPrefsWriterError.verificationFailed(key: entry.key, expected: entry.target, actual: actual[entry.key])
             }
             return PrefsPreviewSession(snapshotID: snapshot.id, image: image, changedKeys: result.changedKeys)
         } catch {
