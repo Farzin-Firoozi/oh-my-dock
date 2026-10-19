@@ -128,14 +128,88 @@ private final class TickingClock: @unchecked Sendable {
         let undo = SnapshotUndoService(snapshots: snapshots, restarter: restarter)
 
         try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")
-        let target = try #require(await undo.undoTarget())
+        _ = try #require(await undo.undoTarget())
 
-        try await undo.undo(target)
+        try await undo.undo(expecting: nil)
         #expect(await undo.undoTarget() == nil)
         #expect(await restarter.count == 1)
 
         // The next apply (or restore) is a new mutation and re-enables Undo.
         let next = try await snapshots.save(reason: "Before applying profile Home", profileName: "Home")
         #expect(await undo.undoTarget()?.id == next.id)
+    }
+
+    @Test func undoRefusesAStaleExpectedTargetAfterTheNewestSnapshotIsDeleted() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let restarter = CountingRestarter()
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: try FakeDomainIO(), now: TickingClock().now)
+        let undo = SnapshotUndoService(snapshots: snapshots, restarter: restarter)
+
+        let older = try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")
+        let newest = try await snapshots.save(reason: "Before applying profile Home", profileName: "Home")
+        let cached = try #require(await undo.undoTarget())
+        #expect(cached.id == newest.id)
+
+        try await snapshots.delete(id: newest.id)
+
+        // The cached target is gone: nothing is restored and the older snapshot stays unspent.
+        await #expect(throws: UndoError.self) { try await undo.undo(expecting: cached.id) }
+        #expect(await restarter.count == 0)
+        #expect(await undo.undoTarget()?.id == older.id)
+
+        // Without an expectation, undo resolves the fresh target at click time.
+        try await undo.undo(expecting: nil)
+        #expect(await restarter.count == 1)
+        #expect(await undo.undoTarget() == nil)
+    }
+
+    @Test func undoWithNothingToUndoThrows() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: try FakeDomainIO(), now: TickingClock().now)
+        let undo = SnapshotUndoService(snapshots: snapshots, restarter: CountingRestarter())
+
+        await #expect(throws: UndoError.self) { try await undo.undo(expecting: nil) }
+    }
+
+    @Test func spentUndoSurvivesARelaunch() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let file = FileSpentUndoRecord(url: root.appendingPathComponent("undo-spent.json"))
+        let snapshots = SnapshotStore(
+            rootDirectory: root.appendingPathComponent("snapshots"), domainIO: try FakeDomainIO(), now: TickingClock().now
+        )
+        let first = SnapshotUndoService(snapshots: snapshots, restarter: CountingRestarter(), record: file)
+
+        try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")
+        try await first.undo(expecting: nil)
+        #expect(await first.undoTarget() == nil)
+
+        // A new process: the safety snapshot the undo left behind must not re-arm Undo.
+        let relaunched = SnapshotUndoService(snapshots: snapshots, restarter: CountingRestarter(), record: file)
+        #expect(await relaunched.undoTarget() == nil)
+
+        let next = try await snapshots.save(reason: "Before applying profile Home", profileName: "Home")
+        #expect(await relaunched.undoTarget()?.id == next.id)
+    }
+
+    @Test func spentRecordRoundTripsAndTreatsBadFilesAsEmpty() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("nested/undo-spent.json")
+        let record = FileSpentUndoRecord(url: url)
+
+        #expect(record.load().isEmpty) // missing
+
+        let ids: Set<UUID> = [UUID(), UUID()]
+        record.save(ids)
+        #expect(record.load() == ids)
+
+        try Data("not json {".utf8).write(to: url)
+        #expect(record.load().isEmpty) // corrupt
+
+        try Data(#"{"spent": ["nope"]}"#.utf8).write(to: url)
+        #expect(record.load().isEmpty) // wrong shape
     }
 }

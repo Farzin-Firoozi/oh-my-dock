@@ -19,6 +19,7 @@ enum AppEnvironment {
     /// app shares. Nothing else constructs these.
     static func makeShell() -> Shell {
         let gate = DockOperationGate()
+        let changes = DockChangeSignal()
         let profiles = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())
         let snapshots = SnapshotStore()
         let restarter = LiveDockRestarter()
@@ -30,11 +31,12 @@ enum AppEnvironment {
             library: profiles,
             dock: backend,
             applier: applier,
-            undoer: SnapshotUndoService(snapshots: snapshots, restarter: restarter),
+            undoer: SnapshotUndoService(snapshots: snapshots, restarter: restarter, record: FileSpentUndoRecord()),
             bootstrap: { _ = try await bootstrapper.runIfNeeded() },
             gate: gate,
             activeRecord: FileActiveProfileRecord(),
-            confirmationPresenter: AlertConfirmationPresenter()
+            confirmationPresenter: AlertConfirmationPresenter(),
+            changes: changes
         )
         hotkeys.attach(menuBar: menuBar)
         let settings = SettingsViewModel(
@@ -44,7 +46,8 @@ enum AppEnvironment {
         )
         let history = HistoryViewModel(
             history: SnapshotHistoryService(snapshots: snapshots, restarter: restarter),
-            gate: gate
+            gate: gate,
+            changes: changes
         )
         return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, profiles: profiles, gate: gate)
     }

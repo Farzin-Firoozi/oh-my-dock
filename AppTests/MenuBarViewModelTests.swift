@@ -54,18 +54,22 @@ private actor FakeApplier: ProfileApplying {
 
 private actor FakeUndoer: DockUndoing {
     private var target: UndoTarget?
-    private(set) var undone: [UndoTarget] = []
+    private(set) var undone: [UUID?] = []
     private var failure: (any Error)?
 
     init(target: UndoTarget? = nil) { self.target = target }
 
     func undoTarget() -> UndoTarget? { target }
 
-    func undo(_ target: UndoTarget) throws {
+    func undo(expecting id: UUID?) throws {
         if let failure { throw failure }
-        undone.append(target)
+        guard let target else { throw UndoError.nothingToUndo }
+        if let id, id != target.id { throw UndoError.targetChanged }
+        undone.append(target.id)
         self.target = nil
     }
+
+    func setTarget(_ target: UndoTarget?) { self.target = target }
 
     func fail(with error: any Error) { failure = error }
 }
@@ -676,7 +680,7 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
         await model.performUndo()
 
-        #expect(await undoer.undone == [Self.target])
+        #expect(await undoer.undone == [Self.target.id])
         #expect(model.banner?.kind == .success)
         #expect(model.undoTarget == nil)
         #expect(model.canUndo == false)
@@ -692,6 +696,35 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
         #expect(model.banner == .init(kind: .failure, message: "boom"))
         #expect(model.undoTarget == Self.target)
+    }
+
+    @Test func aStaleUndoTargetIsRefusedAndRefreshed() async {
+        let fresh = UndoTarget(id: UUID(), createdAt: Date(), summary: "Before restoring a snapshot")
+        let undoer = FakeUndoer(target: Self.target)
+        let model = makeModel(undoer: undoer)
+        await model.refresh()
+
+        // The history changed behind the menu bar's back; its cached target is now stale.
+        await undoer.setTarget(fresh)
+        await model.performUndo()
+
+        #expect(await undoer.undone.isEmpty)
+        #expect(model.banner?.kind == .failure)
+        #expect(model.undoTarget == fresh)
+    }
+
+    @Test func aHistoryChangeSignalRefreshesUndoAvailability() async {
+        let undoer = FakeUndoer(target: Self.target)
+        let changes = DockChangeSignal()
+        let model = MenuBarViewModel(
+            library: FakeLibrary(), dock: FakeDockBackend(), applier: noApply, undoer: undoer, changes: changes
+        )
+        await model.refresh()
+        #expect(model.undoTarget == Self.target)
+
+        await undoer.setTarget(nil)
+        changes.notify()
+        #expect(await eventually { model.undoTarget == nil })
     }
 }
 

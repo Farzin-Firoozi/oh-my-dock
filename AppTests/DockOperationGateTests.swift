@@ -34,7 +34,7 @@ private struct SlowUndoer: DockUndoing {
         UndoTarget(id: UUID(), createdAt: Date(), summary: "Before applying profile X")
     }
 
-    func undo(_ target: UndoTarget) async throws { await probe.work() }
+    func undo(expecting id: UUID?) async throws { await probe.work() }
 }
 
 private struct SlowHistory: SnapshotHistoryManaging {

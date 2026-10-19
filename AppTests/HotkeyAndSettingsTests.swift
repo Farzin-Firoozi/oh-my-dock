@@ -312,5 +312,5 @@ private actor RecordingApplier: ProfileApplying {
 
 private actor EmptyUndoer: DockUndoing {
     func undoTarget() -> UndoTarget? { nil }
-    func undo(_ target: UndoTarget) async throws {}
+    func undo(expecting id: UUID?) async throws {}
 }

@@ -35,10 +35,16 @@ final class HistoryViewModel {
 
     @ObservationIgnored private let history: any SnapshotHistoryManaging
     @ObservationIgnored private let gate: DockOperationGate
+    @ObservationIgnored private let changes: DockChangeSignal
 
-    init(history: any SnapshotHistoryManaging, gate: DockOperationGate = DockOperationGate()) {
+    init(
+        history: any SnapshotHistoryManaging,
+        gate: DockOperationGate = DockOperationGate(),
+        changes: DockChangeSignal = DockChangeSignal()
+    ) {
         self.history = history
         self.gate = gate
+        self.changes = changes
     }
 
     func load() async {
@@ -91,7 +97,11 @@ final class HistoryViewModel {
         guard !isBusy else { return }
         isWorking = true
         errorMessage = nil
-        defer { isWorking = false }
+        defer {
+            isWorking = false
+            // Even a failed restore may have changed the snapshots (its safety copy), so always signal.
+            changes.notify()
+        }
 
         do {
             switch action {

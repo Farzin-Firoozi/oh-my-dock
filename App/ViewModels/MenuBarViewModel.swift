@@ -103,7 +103,8 @@ final class MenuBarViewModel {
         gate: DockOperationGate = DockOperationGate(),
         activeRecord: any ActiveProfileRecording = InMemoryActiveProfileRecord(),
         confirmationPresenter: (any ConfirmationPresenting)? = nil,
-        confirmationTimeout: Duration = .seconds(120)
+        confirmationTimeout: Duration = .seconds(120),
+        changes: DockChangeSignal = DockChangeSignal()
     ) {
         self.gate = gate
         self.confirmationPresenter = confirmationPresenter
@@ -115,6 +116,11 @@ final class MenuBarViewModel {
         self.applier = applier
         self.undoer = undoer
         self.bootstrap = bootstrap
+        // A history restore or delete changes what Undo would do; reload so it can't act on a stale target.
+        changes.observe { [weak self] in
+            guard let self else { return }
+            Task { await self.refresh() }
+        }
     }
 
     // MARK: Lifecycle
@@ -311,11 +317,12 @@ final class MenuBarViewModel {
 
     func performUndo() async {
         guard let target = undoTarget, !isBusy else { return }
+        // The service resolves the real target under the gate and refuses if it isn't `target`.
         activity = .undoing
         banner = nil
         defer { activity = nil }
         do {
-            try await gate.run("Restoring the previous Dock") { try await undoer.undo(target) }
+            try await gate.run("Restoring the previous Dock") { try await undoer.undo(expecting: target.id) }
             lastAppliedID = nil
             show(.success, "Restored the Dock from before the last change.")
         } catch {

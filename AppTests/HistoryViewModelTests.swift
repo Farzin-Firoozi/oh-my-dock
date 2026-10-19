@@ -186,4 +186,21 @@ private func snapshot(pinned: Bool = false) -> Snapshot {
         model.errorMessage = "x"
         #expect(model.isInteractionLocked)
     }
+
+    @Test func restoreAndDeleteSignalTheMenuBarToRefresh() async {
+        let item = snapshot()
+        let changes = DockChangeSignal()
+        var signals = 0
+        changes.observe { signals += 1 }
+        let model = HistoryViewModel(history: FakeHistory([item]), changes: changes)
+
+        await model.perform(.restore(item))
+        #expect(signals == 1)
+        await model.perform(.delete(item))
+        #expect(signals == 2)
+
+        // Pinning does not change what Undo targets.
+        await model.setPinned(true, for: item)
+        #expect(signals == 2)
+    }
 }
