@@ -47,6 +47,22 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 - **`DockPrefsWriter`**: `captureAsDockPrefs()` / `captureCurrent()` for “save current”; `diff(current:target:)` → `PrefsDiff` for the diff preview; `apply(_:expecting:)` validates ranges, refuses when the domain changed since `expecting` (`DockPrefsWriterError.prefsChanged`, same idea as `DockBackendError.dockChanged`), writes only non-`nil` `DockPrefs` fields, verifies every write by re-reading, returns `changedKeys`, `needsDockRestart` (true when any key changed — caller runs one `killall Dock` with tile apply), and `rollbackImage` for `rollback(_:)`.
 - **Planned apply order** (see implementation-plan): tile `DockBackend.apply` → `DockPrefsWriter.apply` → single `DockRestarter.restart()`.
 
+## Export formats
+
+### dockutil shell script
+
+`DockutilScriptExporter.export` turns a profile into a POSIX `sh` script that rebuilds the Dock on a clean account. It returns text. It does not run the script, launch dockutil, or touch the live Dock.
+
+- The script starts with `#!/bin/sh` and `set -eu`. If `dockutil` is not on `PATH`, it prints `brew install dockutil` and exits.
+- Then `dockutil --remove all --no-restart`, then one `--add` per tile (apps, then others). Each add passes `--section` and a 1-based `--position` within that section. Folders also pass `--view`, `--display`, and `--sort`. Labels use `--label=` (so a value that starts with `-` is not another flag). Spacers use dockutil's spacer type and the sentinel label `oh-my-dock-spacer`. Every dockutil invocation includes `--no-restart`.
+- When the profile has `prefs`, each set key is one `defaults write com.apple.dock <defaults key>` line (`-bool`, `-float`, or `-string`). `nil` prefs omit the block. An empty prefs object writes nothing.
+- The script ends with a single `killall Dock`. Switching options and hotkeys are not Dock contents, so they are not in the script.
+- Every profile value is single-quoted (`'` → `'\''`). `$()`, backticks, newlines, quotes, spaces, and unicode stay data. A path under the home directory passed to `export` is written as `"$HOME"` plus a single-quoted suffix, never as that machine's home path (`/Users/mehack` is not under `/Users/me`). The suffix stays outside the double quotes, where `$()` would run.
+- The header comment carries the profile name and `OhMyDockCore.version`. The name is newline-stripped (including Unicode line separators) and single-quoted, so it cannot leave the comment.
+- Export refuses a NUL in the profile name or in any tile string, an app with no path (dockutil adds apps by path), and any profile that fails `validate()`.
+
+Tests syntax-check generated scripts with `sh -n` on stdin. They do not execute them.
+
 ## Native Dock limits
 
 - **Every change restarts the Dock** (`killall Dock`), so icons flash for about a second. Always batch with `--no-restart` and restart once.
