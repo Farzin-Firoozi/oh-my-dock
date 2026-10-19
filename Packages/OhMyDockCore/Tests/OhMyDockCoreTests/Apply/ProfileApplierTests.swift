@@ -91,6 +91,21 @@ private struct RewritingBackend: DockBackend {
     }
 }
 
+/// A backend whose preflight refuses every batch, like dockutil's planner on a plan it cannot express.
+private struct RefusingBackend: DockBackend {
+    let inner: FakeDockBackend
+    let refusal: DockBackendError
+
+    init(_ inner: FakeDockBackend, refusal: DockBackendError) {
+        self.inner = inner
+        self.refusal = refusal
+    }
+
+    func read() async throws -> DockState { try await inner.read() }
+    func apply(_ operations: [DockOperation]) async throws { try await inner.apply(operations) }
+    func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight { throw refusal }
+}
+
 /// One-shot latch: `wait()` returns once `open()` has been called (before or after).
 private actor Gate {
     private var isOpen = false
@@ -390,6 +405,31 @@ struct ProfileApplierTests {
         #expect(await env.backend.appliedBatches.isEmpty)
         #expect(await env.snapshots.isEmpty)
         #expect(await env.restarter.count == 0)
+    }
+
+    @Test func backendRefusingBeforeWritingDoesNotRestoreOrRestart() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let refusal = DockBackendError.invalidOperation("dockutil cannot add this")
+        let applier = env.applier(backend: RefusingBackend(env.backend, refusal: refusal))
+
+        let error = await applyError { try await applier.apply(profile(apps: [calculator])) }
+
+        guard case let .rejectedByBackend(original)? = error else {
+            Issue.record("Expected rejectedByBackend, got \(String(describing: error))")
+            return
+        }
+        #expect(original as? DockBackendError == refusal)
+        #expect(await env.backend.appliedBatches.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+        #expect(await env.io.imports.isEmpty)
+        #expect(await env.restarter.count == 0)
+
+        let previewError = await applyError { _ = try await applier.preview(profile(apps: [calculator])); return .cancelled(rolledBack: false) }
+        guard case .rejectedByBackend? = previewError else {
+            Issue.record("Expected preview to throw rejectedByBackend, got \(String(describing: previewError))")
+            return
+        }
     }
 
     // MARK: Confirm

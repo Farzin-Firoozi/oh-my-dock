@@ -86,6 +86,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
     /// The Dock changed after the plan was computed, so its indices may be stale. Nothing was
     /// written; apply again to plan against the current Dock.
     case dockChanged
+    /// The backend refused the plan before writing anything (e.g. dockutil cannot express it).
+    /// Nothing was snapshotted, written, restored or restarted.
+    case rejectedByBackend(original: any Error)
     /// Writing or restarting failed; the Dock was restored from the snapshot and restarted.
     case failedAndRolledBack(original: any Error)
     /// Writing or restarting failed, and so did the rollback. The Dock may be half-written;
@@ -100,6 +103,8 @@ public enum ApplyError: Error, LocalizedError, Sendable {
             "The profile cannot be applied: \(issues.map(\.message).joined(separator: "; "))"
         case .dockChanged:
             "The Dock changed while the profile was being prepared. Nothing was changed; try again."
+        case let .rejectedByBackend(original):
+            "The Dock cannot be changed this way; nothing was changed: \(original)"
         case let .failedAndRolledBack(original):
             "Applying the profile failed and the previous Dock was restored: \(original)"
         case let .rollbackFailed(original, rollback, snapshotID):
@@ -116,7 +121,8 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 ///
 /// Flow of `apply`:
 /// 1. Validate the profile, resolve app paths, read the Dock and plan the change.
-/// 2. Unsatisfiable plan: throw. Empty plan: `.noChanges`. No snapshot, no restart.
+/// 2. Unsatisfiable plan, or one the backend refuses up front (`preflight`): throw. Nothing was
+///    written, so nothing is restored or restarted. Empty plan: `.noChanges`. No snapshot, no restart.
 /// 3. `confirm` declines: `.cancelled`.
 /// 4. Snapshot the Dock, then re-read it. When it no longer equals the state the plan was
 ///    computed from (someone edited the Dock meanwhile), throw `ApplyError.dockChanged`: the
@@ -396,9 +402,17 @@ public actor ProfileApplier {
         let target = Self.canonicalized(resolved.target, against: current)
         let plan = planner(current, target)
         // Only a plan that will be written has side effects to report.
-        let clearsRecentApps = plan.unsatisfiable || plan.isEmpty
-            ? false
-            : try await backend.preflight(plan.operations).clearsRecentApps
+        var clearsRecentApps = false
+        if !plan.unsatisfiable, !plan.isEmpty {
+            do {
+                clearsRecentApps = try await backend.preflight(plan.operations).clearsRecentApps
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                // Raised before the first write: there is nothing to restore or restart.
+                throw ApplyError.rejectedByBackend(original: error)
+            }
+        }
         return ApplyPreview(
             profileName: profile.name,
             current: current,
