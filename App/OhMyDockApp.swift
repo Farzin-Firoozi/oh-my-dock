@@ -19,9 +19,7 @@ struct OhMyDockApp: App {
         }
         .menuBarExtraStyle(.window)
 
-        Window("Editor", id: "editor") {
-            EditorPlaceholderView()
-        }
-        .defaultSize(width: 720, height: 480)
+        Window("Editor", id: "editor") { EditorWindow() }
+        .defaultSize(width: 900, height: 600)
     }
 }
