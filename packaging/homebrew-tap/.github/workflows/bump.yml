@@ -51,7 +51,7 @@ jobs:
           VERSION: ${{ env.VERSION }}
         run: |
           set -euo pipefail
-          published="$(tr -d '[:space:]' < "OhMyDock-${VERSION}.zip.sha256")"
+          published="$(awk 'NR==1 { print $1 }' "OhMyDock-${VERSION}.zip.sha256")"
           if [[ ! "${published}" =~ ^[0-9a-fA-F]{64}$ ]]; then
             echo "Published sha256 file is not a 64-character hex digest" >&2
             exit 1
