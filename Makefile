@@ -1,4 +1,4 @@
-.PHONY: generate test build dockutil hooks release
+.PHONY: generate test build dockutil hooks release verify-release
 
 generate:
 	xcodegen generate
@@ -18,3 +18,8 @@ hooks:
 
 release:
 	./scripts/release.sh
+
+# Usage: make verify-release APP=path/to/OhMyDock.app (defaults to the Release build)
+APP ?= build/Build/Products/Release/OhMyDock.app
+verify-release:
+	./scripts/verify-release.sh "$(APP)"
