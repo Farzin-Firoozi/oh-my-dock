@@ -305,6 +305,49 @@ import Testing
         #expect(result.changes.contains(.clearedAppPath(.apps, index: 0)))
     }
 
+    @Test func dotDotThroughASymlinkIsAppliedToTheRealDirectory() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sanitizer-\(UUID().uuidString)", isDirectory: true)
+        let homeDir = base.appendingPathComponent("home", isDirectory: true)
+        let outside = base.appendingPathComponent("outside", isDirectory: true)
+        for dir in [homeDir, outside] {
+            try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        }
+        defer { try? FileManager.default.removeItem(at: base) }
+        let escape = homeDir.appendingPathComponent("escape").path
+        let trick = homeDir.appendingPathComponent("trick").path
+        try FileManager.default.createSymbolicLink(atPath: escape, withDestinationPath: outside.path)
+        // Lexically `escape/..` is home; really it is `base`, outside home.
+        try FileManager.default.createSymbolicLink(atPath: trick, withDestinationPath: "escape/..")
+
+        let profile = Profile(name: "P", others: [
+            .folder(FolderItem(path: trick + "/not-yet")),
+            .folder(FolderItem(path: homeDir.path + "/plain/new")),
+        ])
+        let result = try profile.sanitizedForImport(homeDirectory: homeDir)
+
+        #expect(result.profile.others == [.folder(FolderItem(path: homeDir.path + "/plain/new"))])
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .disallowedPath)))
+    }
+
+    @Test func symlinkLoopsAreRejected() throws {
+        let base = FileManager.default.temporaryDirectory
+            .appendingPathComponent("sanitizer-\(UUID().uuidString)", isDirectory: true)
+        let homeDir = base.appendingPathComponent("home", isDirectory: true)
+        try FileManager.default.createDirectory(at: homeDir, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: base) }
+        let loop = homeDir.appendingPathComponent("loop").path
+        try FileManager.default.createSymbolicLink(atPath: loop, withDestinationPath: loop)
+
+        let profile = Profile(name: "P", others: [
+            .folder(FolderItem(path: loop + "/x")),
+            .folder(FolderItem(path: homeDir.path + "/fine")),
+        ])
+        let result = try profile.sanitizedForImport(homeDirectory: homeDir)
+
+        #expect(result.profile.others == [.folder(FolderItem(path: homeDir.path + "/fine"))])
+    }
+
     @Test func byteLengthIsCappedAsWellAsCharacterCount() throws {
         // One grapheme, but over 1 KiB of UTF-8.
         let heavy = "e" + String(repeating: "\u{0301}", count: 600)

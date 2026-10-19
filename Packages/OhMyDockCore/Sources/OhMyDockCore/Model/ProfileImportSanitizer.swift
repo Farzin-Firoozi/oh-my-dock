@@ -104,7 +104,7 @@ private struct ProfileImportSanitizer {
     init(home: String) {
         let trimmed = Self.trimmed(home)
         self.home = trimmed
-        self.resolvedHome = Self.trimmed(URL(fileURLWithPath: trimmed).resolvingSymlinksInPath().path)
+        self.resolvedHome = Self.resolvingExistingAncestor(of: trimmed) ?? trimmed
     }
 
     private static func trimmed(_ path: String) -> String {
@@ -307,30 +307,34 @@ private struct ProfileImportSanitizer {
 
     private static let maxSymlinkHops = 32
 
-    /// Resolves symlinks in the deepest ancestor of `path` that exists (a dangling link counts as
-    /// existing and is followed) and appends the components that do not exist yet. Nil when the
-    /// links loop or are too deep.
-    private static func resolvingExistingAncestor(of path: String, hops: Int = 0) -> String? {
-        guard hops <= maxSymlinkHops else { return nil }
+    /// Resolves `path` one component at a time against the filesystem, like `realpath`, except that
+    /// components that do not exist yet are kept as they are. A symlink's target is spliced in
+    /// front of the remaining components, so a `..` is applied to the real directory the links
+    /// lead to, never to the link's own name (`~/trick -> ~/escape/..` with `~/escape -> /etc`
+    /// resolves to `/`, not to `~`). A dangling link counts as existing and is followed. Nil when
+    /// the links loop or are too deep.
+    private static func resolvingExistingAncestor(of path: String) -> String? {
         let fileManager = FileManager.default
-        var existing = path
-        var missing: [String] = []
-        // `attributesOfItem` does not follow a final link, so a dangling link is found.
-        while existing != "/", (try? fileManager.attributesOfItem(atPath: existing)) == nil {
-            missing.insert((existing as NSString).lastPathComponent, at: 0)
-            existing = (existing as NSString).deletingLastPathComponent
+        var resolved: [String] = []
+        var pending = path.split(separator: "/").map(String.init).reversed() as [String]
+        var hops = 0
+        while let component = pending.popLast() {
+            if component == "." { continue }
+            if component == ".." {
+                _ = resolved.popLast()
+                continue
+            }
+            let candidate = "/" + (resolved + [component]).joined(separator: "/")
+            if let destination = try? fileManager.destinationOfSymbolicLink(atPath: candidate) {
+                hops += 1
+                guard hops <= maxSymlinkHops else { return nil }
+                if destination.hasPrefix("/") { resolved = [] }
+                pending.append(contentsOf: destination.split(separator: "/").map(String.init).reversed())
+            } else {
+                resolved.append(component)
+            }
         }
-        if let destination = try? fileManager.destinationOfSymbolicLink(atPath: existing) {
-            let target = destination.hasPrefix("/")
-                ? destination
-                : ((existing as NSString).deletingLastPathComponent as NSString).appendingPathComponent(destination)
-            let rest = missing.joined(separator: "/")
-            let joined = rest.isEmpty ? target : (target as NSString).appendingPathComponent(rest)
-            return resolvingExistingAncestor(of: (joined as NSString).standardizingPath, hops: hops + 1)
-        }
-        var resolved = URL(fileURLWithPath: existing).resolvingSymlinksInPath().path
-        for component in missing { resolved = (resolved as NSString).appendingPathComponent(component) }
-        return resolved
+        return "/" + resolved.joined(separator: "/")
     }
 
     private static func isStrictDescendant(_ path: String, of root: String) -> Bool {
