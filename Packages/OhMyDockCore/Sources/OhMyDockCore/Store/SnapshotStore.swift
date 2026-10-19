@@ -226,6 +226,18 @@ public actor SnapshotStore {
         profileName: String? = nil,
         pinned: Bool = false
     ) async throws -> Snapshot {
+        try await save(reason: reason, profileName: profileName, pinned: pinned, alsoProtecting: nil)
+    }
+
+    @discardableResult
+    /// `alsoProtecting` is a snapshot that must survive the prune this save triggers (the one
+    /// being restored when this is the restore's safety snapshot).
+    private func save(
+        reason: String,
+        profileName: String?,
+        pinned: Bool,
+        alsoProtecting extraProtectedID: UUID?
+    ) async throws -> Snapshot {
         try ensureRootDirectoryExists()
 
         let id = UUID()
@@ -268,7 +280,7 @@ public actor SnapshotStore {
             try? fileManager.removeItem(at: plistURL)
             throw error
         }
-        try prune(keep: retentionLimit, preserving: snapshot.id)
+        try prune(keep: retentionLimit, preserving: [snapshot.id, extraProtectedID].compactMap { $0 })
         return snapshot
     }
 
@@ -342,7 +354,13 @@ public actor SnapshotStore {
 
         if createSafetySnapshot {
             let date = Self.restoreDateString(now())
-            try await save(reason: "Before restoring \(date)")
+            // The prune after this save must not delete the snapshot we are about to restore.
+            try await save(
+                reason: "Before restoring \(date)",
+                profileName: nil,
+                pinned: false,
+                alsoProtecting: id
+            )
         }
 
         try ensureRootDirectoryExists()
@@ -358,35 +376,115 @@ public actor SnapshotStore {
             ".tmp-verification-\(UUID().uuidString).plist",
             isDirectory: false
         )
+        let rollbackURL = rootURL.appendingPathComponent(
+            ".tmp-rollback-\(UUID().uuidString).plist",
+            isDirectory: false
+        )
         defer {
             try? fileManager.removeItem(at: restoreURL)
             try? fileManager.removeItem(at: currentURL)
             try? fileManager.removeItem(at: verificationURL)
+            try? fileManager.removeItem(at: rollbackURL)
         }
 
+        // Nothing is written before this export: a failure here leaves the domain untouched.
         try await domainIO.exportDomain(to: currentURL)
         let currentData = try Data(contentsOf: currentURL)
         let currentDictionary = try plistDictionary(currentData)
         let keysToDelete = Set(currentDictionary.keys)
             .subtracting(targetDictionary.keys)
             .sorted()
-        for key in keysToDelete {
+
+        // From the first deleteKey on, the domain can be in a mixed state. The pre-image
+        // (`currentData`) is kept so any failure can put the previous domain back.
+        do {
+            try await replaceDomain(with: data, deleting: keysToDelete, via: restoreURL)
+            try await verifyRestored(
+                target: targetDictionary,
+                deletedKeys: keysToDelete,
+                id: id,
+                via: verificationURL
+            )
+        } catch {
+            await rollBackDomain(
+                to: currentData,
+                currentKeys: Set(currentDictionary.keys),
+                attemptedKeys: Set(targetDictionary.keys),
+                via: rollbackURL,
+                scratchURL: verificationURL
+            )
+            throw error
+        }
+    }
+
+    /// Keys the running Dock rewrites on its own between our import and the read-back. They are
+    /// excluded from verification so a live Dock cannot make a correct restore look failed.
+    private static let volatileDockKeys: Set<String> = ["recent-apps", "mod-count"]
+
+    /// `defaults import` merges into the domain rather than replacing it, so replace semantics
+    /// come from deleting every key the new contents lack and then importing.
+    private func replaceDomain(with data: Data, deleting keys: [String], via url: URL) async throws {
+        for key in keys {
             try await domainIO.deleteKey(key)
         }
+        try data.write(to: url, options: [])
+        try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+        try await domainIO.importDomain(from: url)
+    }
 
-        try data.write(to: restoreURL, options: [])
-        try fileManager.setAttributes(
-            [.posixPermissions: 0o600],
-            ofItemAtPath: restoreURL.path
-        )
-        try await domainIO.importDomain(from: restoreURL)
-
-        try await domainIO.exportDomain(to: verificationURL)
-        let restoredData = try Data(contentsOf: verificationURL)
-        let restoredDictionary = try plistDictionary(restoredData)
-        guard NSDictionary(dictionary: restoredDictionary).isEqual(to: targetDictionary) else {
-            throw SnapshotStoreError.restoreVerificationFailed(id)
+    /// Compares only what matters: every non-volatile target key must read back equal, and
+    /// every non-volatile key we deleted must be gone. Other keys the Dock added meanwhile are
+    /// ignored. Retries once, since the Dock may still be rewriting right after the import.
+    private func verifyRestored(
+        target: [String: Any],
+        deletedKeys: [String],
+        id: UUID,
+        via url: URL
+    ) async throws {
+        for attempt in 0..<2 {
+            try await domainIO.exportDomain(to: url)
+            let restored = try plistDictionary(try Data(contentsOf: url))
+            let targetMatches = target.allSatisfy { key, value in
+                Self.volatileDockKeys.contains(key)
+                    || restored[key].map { NSDictionary(dictionary: [key: value]).isEqual(to: [key: $0]) } ?? false
+            }
+            let deletionsHeld = deletedKeys.allSatisfy {
+                Self.volatileDockKeys.contains($0) || restored[$0] == nil
+            }
+            if targetMatches && deletionsHeld { return }
+            if attempt == 0 { try? await Task.sleep(nanoseconds: 200_000_000) }
         }
+        throw SnapshotStoreError.restoreVerificationFailed(id)
+    }
+
+    /// Best effort: re-applies the pre-restore domain with replace semantics. Errors are
+    /// swallowed so the original failure is the one reported.
+    private func rollBackDomain(
+        to preImage: Data,
+        currentKeys: Set<String>,
+        attemptedKeys: Set<String>,
+        via url: URL,
+        scratchURL: URL
+    ) async {
+        // Keys the failed restore may have added: anything in the target or now in the domain
+        // that the pre-image does not have.
+        var extra = attemptedKeys
+        if (try? await domainIO.exportDomain(to: scratchURL)) != nil,
+           let data = try? Data(contentsOf: scratchURL),
+           let dictionary = try? plistDictionary(data)
+        {
+            extra.formUnion(dictionary.keys)
+        }
+        let keys = extra.subtracting(currentKeys).sorted()
+        // Keep going past a failed delete: importing the pre-image is the part that matters.
+        for key in keys {
+            try? await domainIO.deleteKey(key)
+        }
+        do {
+            try preImage.write(to: url, options: [])
+            try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
+            try await domainIO.importDomain(from: url)
+        } catch {}
     }
 
     public func delete(id: UUID) throws {
@@ -406,10 +504,12 @@ public actor SnapshotStore {
     }
 
     public func prune(keep: Int = 50) throws {
-        try prune(keep: keep, preserving: nil)
+        try prune(keep: keep, preserving: [])
     }
 
-    private func prune(keep: Int, preserving protectedID: UUID?) throws {
+    /// Unpinned snapshots in `protectedIDs` are never deleted and count against `keep`. With
+    /// none given, the newest snapshot is protected.
+    private func prune(keep: Int, preserving protectedIDs: [UUID]) throws {
         guard keep >= 0 else {
             throw SnapshotStoreError.invalidKeepCount(keep)
         }
@@ -417,27 +517,22 @@ public actor SnapshotStore {
         let snapshots = list().snapshots
         guard let newest = snapshots.first else { return }
 
-        let protectedSnapshot = snapshots.first {
-            $0.id == (protectedID ?? newest.id)
-        }
-        let protectedUnpinnedID = protectedSnapshot?.pinned == false
-            ? protectedSnapshot?.id
-            : nil
-        let remainingSlots = max(keep - (protectedUnpinnedID == nil ? 0 : 1), 0)
+        let protectedSet: Set<UUID> = protectedIDs.isEmpty ? [newest.id] : Set(protectedIDs)
+        let protectedUnpinned = Set(
+            snapshots.filter { protectedSet.contains($0.id) && !$0.pinned }.map(\.id)
+        )
+        let remainingSlots = max(keep - protectedUnpinned.count, 0)
         var retainedUnpinned = Set(
             snapshots.lazy
-                .filter { !$0.pinned && $0.id != protectedUnpinnedID }
+                .filter { !$0.pinned && !protectedUnpinned.contains($0.id) }
                 .prefix(remainingSlots)
                 .map(\.id)
         )
-        if let protectedUnpinnedID {
-            retainedUnpinned.insert(protectedUnpinnedID)
-        }
-        let protectedSnapshotID = protectedID ?? newest.id
+        retainedUnpinned.formUnion(protectedUnpinned)
 
         for snapshot in snapshots
         where !snapshot.pinned
-            && snapshot.id != protectedSnapshotID
+            && !protectedSet.contains(snapshot.id)
             && !retainedUnpinned.contains(snapshot.id)
         {
             try delete(id: snapshot.id)

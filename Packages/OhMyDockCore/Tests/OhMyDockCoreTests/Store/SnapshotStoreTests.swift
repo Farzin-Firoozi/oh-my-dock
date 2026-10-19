@@ -172,6 +172,104 @@ import Testing
         }
     }
 
+    @Test func restoreRollsBackToPreviousDomainWhenDeleteFailsMidway() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let current = try dockPlist(
+            label: "Current",
+            additionalValues: ["extra-a": 1, "extra-b": 2]
+        )
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(current)
+        await io.failDelete(onCall: 2)
+
+        await #expect(throws: FakeDockDomainIO.Injected.self) {
+            try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+        }
+        #expect(try plistDictionary(await io.domainData) == plistDictionary(current))
+    }
+
+    @Test func restoreRollsBackToPreviousDomainWhenImportFails() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let current = try dockPlist(label: "Current", additionalValues: ["extra-a": 1])
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(current)
+        await io.failNextImport()
+
+        await #expect(throws: FakeDockDomainIO.Injected.self) {
+            try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+        }
+        #expect(try plistDictionary(await io.domainData) == plistDictionary(current))
+    }
+
+    @Test func restoreRollsBackToPreviousDomainWhenVerificationFails() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let current = try dockPlist(label: "Current", additionalValues: ["extra-a": 1])
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(current)
+        await io.setDomainDataAfterImport(try dockPlist(label: "Rewritten by macOS"))
+
+        await #expect(
+            throws: SnapshotStoreError.restoreVerificationFailed(targetSnapshot.id)
+        ) {
+            try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+        }
+        #expect(try plistDictionary(await io.domainData) == plistDictionary(current))
+    }
+
+    @Test func restoreToleratesDockRewritingVolatileKeys() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(try dockPlist(label: "Current", additionalValues: ["mod-count": 1]))
+        await io.setDomainDataAfterImport(try dockPlist(
+            label: "Target",
+            additionalValues: ["mod-count": 7, "recent-apps": [["tile-data": ["file-label": "X"]]]]
+        ))
+
+        try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+    }
+
+    @Test func safetySnapshotPruneNeverDeletesSnapshotBeingRestored() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let io = FakeDockDomainIO(domainData: try dockPlist(label: "Target"))
+        let clock = TestClock((1...5).map { Date(timeIntervalSince1970: TimeInterval($0)) })
+        let store = SnapshotStore(
+            rootDirectory: root,
+            domainIO: io,
+            retentionLimit: 1,
+            now: { clock.next() }
+        )
+        let target = try await store.save(reason: "Target")
+        await io.setDomainData(try dockPlist(label: "Current"))
+
+        try await store.restore(id: target.id)
+
+        let ids = await store.list().snapshots.map(\.id)
+        #expect(ids.contains(target.id))
+        #expect(ids.count == 2)
+    }
+
     @Test func pruneKeepsRequestedUnpinnedSnapshotsAndPinnedSnapshots() async throws {
         let root = try makeTempRoot()
         defer { cleanup(root) }
@@ -485,6 +583,14 @@ private actor FakeDockDomainIO: DockDomainIO {
     private(set) var exportCount = 0
     private(set) var deletedKeys: [String] = []
     private var domainDataAfterImport: Data?
+    private var failDeleteCall: Int?
+    private var deleteCalls = 0
+    private var shouldFailNextImport = false
+
+    struct Injected: Error {}
+
+    func failDelete(onCall call: Int) { failDeleteCall = call }
+    func failNextImport() { shouldFailNextImport = true }
 
     init(domainData: Data) {
         self.domainData = domainData
@@ -504,6 +610,10 @@ private actor FakeDockDomainIO: DockDomainIO {
     }
 
     func importDomain(from url: URL) async throws {
+        if shouldFailNextImport {
+            shouldFailNextImport = false
+            throw Injected()
+        }
         importedData = try Data(contentsOf: url)
         var current = try Self.dictionary(from: domainData)
         let imported = try Self.dictionary(from: importedData!)
@@ -520,6 +630,8 @@ private actor FakeDockDomainIO: DockDomainIO {
     }
 
     func deleteKey(_ key: String) async throws {
+        deleteCalls += 1
+        if deleteCalls == failDeleteCall { throw Injected() }
         deletedKeys.append(key)
         var current = try Self.dictionary(from: domainData)
         current.removeValue(forKey: key)
