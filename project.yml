@@ -88,6 +88,7 @@ targets:
       - path: AppTests
       - path: App/Services
       - path: App/ViewModels
+      - path: App/Editor
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore
