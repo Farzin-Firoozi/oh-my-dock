@@ -466,6 +466,43 @@ import Testing
         #expect(h.runner.calls.isEmpty)
     }
 
+    // MARK: - Preflight
+
+    @Test func preflightRunsNothingAndReportsAnIncrementalBatchKeepsRecentApps() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        let backend = h.backend(reading: [DockState(apps: [calc, notes])])
+
+        let preflight = try await backend.preflight([.remove(section: .apps, index: 1)])
+
+        #expect(preflight == DockWritePreflight(clearsRecentApps: false))
+        #expect(h.runner.calls.isEmpty)
+    }
+
+    @Test func preflightReportsARewriteDockutilForcesOnAnIncrementalBatch() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        // The batch has no `.replaceAll`, but removing one of two equal tiles is ambiguous for
+        // dockutil, so it rewrites the Dock, which also clears the recent apps.
+        let backend = h.backend(reading: [DockState(apps: [calc, calc, notes])])
+
+        let preflight = try await backend.preflight([.remove(section: .apps, index: 1)])
+
+        #expect(preflight == DockWritePreflight(clearsRecentApps: true))
+        #expect(h.runner.calls.isEmpty)
+    }
+
+    @Test func preflightThrowsWhatApplyWouldThrowBeforeWriting() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        let backend = h.backend(reading: [DockState(apps: [calc])])
+
+        await #expect(throws: DockBackendError.indexOutOfRange(section: .apps, index: 5)) {
+            try await backend.preflight([.remove(section: .apps, index: 5)])
+        }
+        #expect(h.runner.calls.isEmpty)
+    }
+
     // MARK: - Failures
 
     @Test func nonZeroExitIsCommandFailedWithStderrAndStopsTheBatch() async throws {

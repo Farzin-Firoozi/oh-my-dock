@@ -13,12 +13,35 @@ public enum DockOperation: Hashable, Sendable {
     case replaceAll(DockState)
 }
 
+/// What a backend knows about a batch before writing it.
+public struct DockWritePreflight: Hashable, Sendable {
+    /// True when writing the batch also clears the Dock's recent-apps list, which is not part of
+    /// `DockState`. dockutil does this whenever it has to rewrite the whole Dock.
+    public var clearsRecentApps: Bool
+
+    public init(clearsRecentApps: Bool = false) {
+        self.clearsRecentApps = clearsRecentApps
+    }
+}
+
 public protocol DockBackend: Sendable {
     /// Current Dock contents.
     func read() async throws -> DockState
+    /// Checks that `apply(operations)` can run and reports side effects, writing nothing.
+    /// Throws what `apply` would throw before its first write.
+    func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight
     /// Apply operations WITHOUT restarting the Dock. Implementations must verify the
     /// result by re-reading and throw `DockBackendError.verificationFailed` on mismatch.
     func apply(_ operations: [DockOperation]) async throws
+}
+
+public extension DockBackend {
+    /// Assumes the backend can run any batch that applies cleanly and only clears recent apps
+    /// when it replaces the whole Dock.
+    func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight {
+        let replacesAll = operations.contains { if case .replaceAll = $0 { true } else { false } }
+        return DockWritePreflight(clearsRecentApps: replacesAll)
+    }
 }
 
 public enum DockBackendError: Error, Equatable, Sendable {

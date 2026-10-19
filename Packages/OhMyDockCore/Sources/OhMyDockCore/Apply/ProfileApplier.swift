@@ -34,8 +34,9 @@ public struct ApplyPreview: Hashable, Sendable {
     public let target: DockState
     public let plan: DockPlan
     public let skipped: [SkippedItem]
-    /// True when the plan is a full rewrite, which also clears the Dock's recent apps. Incremental
-    /// edits leave them alone.
+    /// True when writing the plan also clears the Dock's recent apps: the plan is a full rewrite,
+    /// or the backend turns it into one (dockutil does when a tile cannot be addressed uniquely).
+    /// Incremental edits leave them alone.
     public let clearsRecentApps: Bool
 
     public init(
@@ -43,14 +44,15 @@ public struct ApplyPreview: Hashable, Sendable {
         current: DockState,
         target: DockState,
         plan: DockPlan,
-        skipped: [SkippedItem]
+        skipped: [SkippedItem],
+        clearsRecentApps: Bool = false
     ) {
         self.profileName = profileName
         self.current = current
         self.target = target
         self.plan = plan
         self.skipped = skipped
-        self.clearsRecentApps = plan.requiresFullRewrite
+        self.clearsRecentApps = clearsRecentApps || plan.requiresFullRewrite
     }
 }
 
@@ -197,8 +199,7 @@ public actor ProfileApplier {
     public func preview(_ profile: Profile) async throws -> ApplyPreview {
         try validate(profile)
         let resolved = resolve(profile)
-        let current = try await backend.read()
-        return makePreview(profile: profile, resolved: resolved, current: current)
+        return try await makePreview(profile: profile, resolved: resolved, current: try await backend.read())
     }
 
     // MARK: Apply
@@ -241,7 +242,7 @@ public actor ProfileApplier {
         do {
             try validate(profile)
             let resolved = resolve(profile)
-            let first = makePreview(profile: profile, resolved: resolved, current: try await backend.read())
+            let first = try await makePreview(profile: profile, resolved: resolved, current: try await backend.read())
 
             if first.plan.unsatisfiable { throw ApplyError.unsatisfiable(issues: first.plan.issues) }
             if first.plan.isEmpty { return .noChanges(first) }
@@ -359,14 +360,24 @@ public actor ProfileApplier {
         return Resolved(target: target, skipped: skipped)
     }
 
-    private func makePreview(profile: Profile, resolved: Resolved, current: DockState) -> ApplyPreview {
+    private func makePreview(
+        profile: Profile,
+        resolved: Resolved,
+        current: DockState
+    ) async throws -> ApplyPreview {
         let target = Self.canonicalized(resolved.target, against: current)
+        let plan = planner(current, target)
+        // Only a plan that will be written has side effects to report.
+        let clearsRecentApps = plan.unsatisfiable || plan.isEmpty
+            ? false
+            : try await backend.preflight(plan.operations).clearsRecentApps
         return ApplyPreview(
             profileName: profile.name,
             current: current,
             target: target,
-            plan: planner(current, target),
-            skipped: resolved.skipped
+            plan: plan,
+            skipped: resolved.skipped,
+            clearsRecentApps: clearsRecentApps
         )
     }
 

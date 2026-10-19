@@ -83,11 +83,13 @@ public struct DockutilBackend: DockBackend {
         try readState()
     }
 
+    public func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight {
+        let prepared = try prepare(operations)
+        return DockWritePreflight(clearsRecentApps: prepared.plan.isFullRewrite)
+    }
+
     public func apply(_ operations: [DockOperation]) async throws {
-        let location = try validatedLocation()
-        let before = try readState()
-        let expected = try before.applying(operations)
-        let plan = try DockutilPlanner.plan(operations: operations, from: before)
+        let (location, expected, plan) = try prepare(operations)
         guard !plan.commands.isEmpty else { return }
 
         for (offset, command) in plan.commands.enumerated() {
@@ -98,6 +100,18 @@ public struct DockutilBackend: DockBackend {
         guard expected.matchesAfterWrite(actual) else {
             throw DockBackendError.verificationFailed(expected: expected, actual: actual)
         }
+    }
+
+    /// Everything that can be refused without writing: the target, the operations' indices and
+    /// what dockutil can express. Runs before the first command.
+    private func prepare(
+        _ operations: [DockOperation]
+    ) throws -> (location: String?, expected: DockState, plan: DockutilPlan) {
+        let location = try validatedLocation()
+        let before = try readState()
+        let expected = try before.applying(operations)
+        let plan = try DockutilPlanner.plan(operations: operations, from: before)
+        return (location, expected, plan)
     }
 
     // MARK: - Running dockutil

@@ -75,6 +75,22 @@ private actor ReadHook: DockBackend {
     }
 }
 
+/// A backend that reports every batch as clearing the recent apps, as dockutil does when it has
+/// to rewrite the whole Dock for an incremental plan.
+private struct RewritingBackend: DockBackend {
+    let inner: FakeDockBackend
+
+    init(_ inner: FakeDockBackend) {
+        self.inner = inner
+    }
+
+    func read() async throws -> DockState { try await inner.read() }
+    func apply(_ operations: [DockOperation]) async throws { try await inner.apply(operations) }
+    func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight {
+        DockWritePreflight(clearsRecentApps: true)
+    }
+}
+
 /// One-shot latch: `wait()` returns once `open()` has been called (before or after).
 private actor Gate {
     private var isOpen = false
@@ -235,6 +251,25 @@ struct ProfileApplierTests {
         }
         #expect(report.clearsRecentApps)
         #expect(await env.backend.state == DockState(apps: [calculator, notes]))
+    }
+
+    @Test func previewWarnsWhenTheBackendTurnsAnIncrementalPlanIntoARewrite() async throws {
+        let env = try Env(current: DockState(apps: [calculator, notes]))
+        defer { env.cleanup() }
+        let rewriting = RewritingBackend(env.backend)
+        let applier = env.applier(backend: rewriting)
+        let wanted = profile(apps: [calculator])
+
+        let preview = try await applier.preview(wanted)
+        #expect(!preview.plan.requiresFullRewrite)
+        #expect(preview.clearsRecentApps)
+
+        let result = try await applier.apply(wanted)
+        guard case let .applied(report) = result else {
+            Issue.record("Expected .applied, got \(result)")
+            return
+        }
+        #expect(report.clearsRecentApps)
     }
 
     // MARK: Preview
