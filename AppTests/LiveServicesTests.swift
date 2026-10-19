@@ -26,6 +26,19 @@ private actor CountingRestarter: DockRestarting {
     func restart() async throws { count += 1 }
 }
 
+/// A clock that moves forward 10 seconds per reading, so snapshot order is unambiguous.
+private final class TickingClock: @unchecked Sendable {
+    private let lock = NSLock()
+    private var date = Date(timeIntervalSinceReferenceDate: 1_000)
+
+    func now() -> Date {
+        lock.lock()
+        defer { lock.unlock() }
+        date.addTimeInterval(10)
+        return date
+    }
+}
+
 @MainActor
 @Suite struct LiveServicesTests {
     private func makeRoot() throws -> URL {
@@ -68,20 +81,61 @@ private actor CountingRestarter: DockRestarting {
         #expect(await domain.imports.count == 1)
         #expect(await restarter.count == 2)
         #expect(model.banner?.kind == .success)
+        // Undo is spent until the next apply or restore.
+        #expect(model.canUndo == false)
     }
 
-    @Test func undoTargetIgnoresSnapshotsThatAreNotApplies() async throws {
+    @Test func undoTargetIgnoresSnapshotsThatAreNotMutations() async throws {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
-        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO())
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO(), now: TickingClock().now)
         let undo = SnapshotUndoService(snapshots: snapshots, restarter: CountingRestarter())
 
         try await snapshots.save(reason: "First launch", pinned: true)
         #expect(await undo.undoTarget() == nil)
 
         let apply = try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")
-        try await snapshots.save(reason: "Before restoring today")
-
         #expect(await undo.undoTarget()?.id == apply.id)
+
+        // A restore is a Dock mutation too: undo goes back to the Dock it replaced.
+        try await snapshots.save(reason: "Before restoring today")
+        let restore = try await snapshots.list().snapshots.first { $0.reason.hasPrefix("Before restoring") }
+        #expect(await undo.undoTarget()?.id == restore?.id)
+    }
+
+    @Test func undoAfterAHistoryRestoreTargetsTheSnapshotBeforeThatRestore() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let restarter = CountingRestarter()
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO(), now: TickingClock().now)
+        let undo = SnapshotUndoService(snapshots: snapshots, restarter: restarter)
+        let history = SnapshotHistoryService(snapshots: snapshots, restarter: restarter)
+
+        try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")
+        let old = try await snapshots.save(reason: "Some older state")
+        try await history.restore(id: old.id)
+
+        // The newest snapshot is the safety copy the restore made, and it is newer than the apply.
+        let target = try #require(await undo.undoTarget())
+        #expect(target.summary.hasPrefix("Before restoring"))
+    }
+
+    @Test func undoIsDisabledAfterUseUntilANewMutation() async throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let restarter = CountingRestarter()
+        let snapshots = SnapshotStore(rootDirectory: root, domainIO: FakeDomainIO(), now: TickingClock().now)
+        let undo = SnapshotUndoService(snapshots: snapshots, restarter: restarter)
+
+        try await snapshots.save(reason: "Before applying profile Work", profileName: "Work")
+        let target = try #require(await undo.undoTarget())
+
+        try await undo.undo(target)
+        #expect(await undo.undoTarget() == nil)
+        #expect(await restarter.count == 1)
+
+        // The next apply (or restore) is a new mutation and re-enables Undo.
+        let next = try await snapshots.save(reason: "Before applying profile Home", profileName: "Home")
+        #expect(await undo.undoTarget()?.id == next.id)
     }
 }

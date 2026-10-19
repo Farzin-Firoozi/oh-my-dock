@@ -65,29 +65,53 @@ enum UndoError: Error, LocalizedError {
     }
 }
 
-/// Undo backed by the apply snapshots in a `SnapshotStore`.
+/// Undo backed by the snapshots a `SnapshotStore` takes right before Dock mutations.
 ///
-/// The target is the newest snapshot taken by an apply. Other snapshots (the pinned first-launch
-/// one, the safety copy a restore makes of the Dock it replaces) are not "the last change", so an
-/// undo never lands on them.
-struct SnapshotUndoService: DockUndoing {
+/// The target is the newest snapshot taken immediately before the most recent Dock mutation of
+/// any kind: an apply ("Before applying profile …") or a restore, whether from the history window
+/// or an undo ("Before restoring …", the safety copy `SnapshotStore.restore` makes of the Dock it
+/// replaces). Other snapshots, such as the pinned first-launch one, are not "the last change", so
+/// an undo never lands on them.
+///
+/// An undo is itself a restore, so it leaves a fresh safety snapshot behind that would otherwise
+/// be offered as the next target and turn Undo into a redo toggle. After an undo this service
+/// marks every mutation snapshot that exists as spent and offers only unspent ones, so Undo stays
+/// disabled after use until the next apply or restore creates a new snapshot. (Tracking ids, not
+/// "the newest", keeps this right when snapshots share a timestamp.) The memory lasts for the
+/// process.
+actor SnapshotUndoService: DockUndoing {
     static let applyReasonPrefix = "Before applying profile"
+    static let restoreReasonPrefix = "Before restoring"
 
-    let snapshots: SnapshotStore
-    let restarter: any DockRestarting
+    private let snapshots: SnapshotStore
+    private let restarter: any DockRestarting
+    private var spent: Set<UUID> = []
+
+    init(snapshots: SnapshotStore, restarter: any DockRestarting) {
+        self.snapshots = snapshots
+        self.restarter = restarter
+    }
 
     func undoTarget() async -> UndoTarget? {
-        await snapshots.list().snapshots
-            .first { $0.reason.hasPrefix(Self.applyReasonPrefix) }
-            .map { UndoTarget(id: $0.id, createdAt: $0.createdAt, summary: $0.reason) }
+        guard let newest = await mutationSnapshots().first(where: { !spent.contains($0.id) }) else { return nil }
+        return UndoTarget(id: newest.id, createdAt: newest.createdAt, summary: newest.reason)
     }
 
     func undo(_ target: UndoTarget) async throws {
         try await snapshots.restore(id: target.id)
+        // The Dock now holds the restored state; whatever happens next, this undo is used up.
+        spent.formUnion(await mutationSnapshots().map(\.id))
         do {
             try await restarter.restart()
         } catch {
             throw UndoError.restoredButRestartFailed(error)
+        }
+    }
+
+    /// Newest first.
+    private func mutationSnapshots() async -> [Snapshot] {
+        await snapshots.list().snapshots.filter {
+            $0.reason.hasPrefix(Self.applyReasonPrefix) || $0.reason.hasPrefix(Self.restoreReasonPrefix)
         }
     }
 }
