@@ -77,7 +77,7 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 | # | Task | Model | Group |
 |---|---|---|---|
 | 3.1 | `scripts/release.sh`: archive, ad-hoc sign (helper first, then app: inside-out), zip/DMG, sha256. No notarization | Sonnet | A |
-| 3.2 | Updates: decide between Sparkle (free EdDSA key, appcast on GitHub Pages) and a "new version available" check against GitHub Releases; verify Sparkle works with ad-hoc signing before committing | Terra | A |
+| 3.2 | Updates: decide between Sparkle (free EdDSA key, appcast on GitHub Pages) and a "new version available" check against GitHub Releases; verify Sparkle works with ad-hoc signing before committing | Grok | A |
 | 3.3 | `homebrew-tap` cask (own tap, `postflight` clears quarantine) + GitHub Action bumping version/sha256 | Composer | B |
 | 3.4 | README (install incl. Gatekeeper workaround, usage) | Haiku | B |
 | 3.5 | 🔴 **Release gate:** test quit/launch (`terminate()`, `openApplication`) on macOS 14, 15, and current with the ad-hoc signed release build on a clean TCC state (spike 0.6 only covered macOS 27) | Sonnet | C |
