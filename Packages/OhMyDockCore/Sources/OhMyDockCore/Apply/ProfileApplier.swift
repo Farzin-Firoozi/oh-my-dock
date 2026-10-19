@@ -71,6 +71,20 @@ public struct ApplyReport: Hashable, Sendable {
     public let skipped: [SkippedItem]
     public let clearsRecentApps: Bool
     public let restarted: Bool
+
+    public init(
+        plan: DockPlan,
+        snapshotID: UUID,
+        skipped: [SkippedItem],
+        clearsRecentApps: Bool,
+        restarted: Bool
+    ) {
+        self.plan = plan
+        self.snapshotID = snapshotID
+        self.skipped = skipped
+        self.clearsRecentApps = clearsRecentApps
+        self.restarted = restarted
+    }
 }
 
 public enum ApplyResult: Hashable, Sendable {
