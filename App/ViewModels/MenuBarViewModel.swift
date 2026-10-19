@@ -18,6 +18,26 @@ final class MenuBarViewModel {
         let profileName: String
         let skippedApps: [String]
         let clearsRecentApps: Bool
+        let preview: ApplyPreview?
+
+        init(
+            profileName: String,
+            skippedApps: [String],
+            clearsRecentApps: Bool,
+            preview: ApplyPreview? = nil
+        ) {
+            self.profileName = profileName
+            self.skippedApps = skippedApps
+            self.clearsRecentApps = clearsRecentApps
+            self.preview = preview
+        }
+
+        static func == (lhs: Confirmation, rhs: Confirmation) -> Bool {
+            lhs.profileName == rhs.profileName &&
+                lhs.skippedApps == rhs.skippedApps &&
+                lhs.clearsRecentApps == rhs.clearsRecentApps &&
+                (lhs.preview == nil || rhs.preview == nil || lhs.preview == rhs.preview)
+        }
     }
 
     enum Activity: Equatable {
@@ -36,6 +56,7 @@ final class MenuBarViewModel {
     private(set) var banner: Banner?
     var isNamingProfile = false
     var newProfileName = ""
+    var showsDiffSheet = false
 
     var isBusy: Bool { activity != nil }
     var canUndo: Bool { undoTarget != nil && !isBusy }
@@ -147,7 +168,8 @@ final class MenuBarViewModel {
                 confirmation = Confirmation(
                     profileName: preview.profileName,
                     skippedApps: preview.skipped.map { $0.app.name.isEmpty ? $0.app.bundleId : $0.app.name },
-                    clearsRecentApps: preview.clearsRecentApps
+                    clearsRecentApps: preview.clearsRecentApps,
+                    preview: preview
                 )
             }
         } onCancel: {
@@ -156,6 +178,7 @@ final class MenuBarViewModel {
     }
 
     func resolveConfirmation(_ accepted: Bool) {
+        showsDiffSheet = false
         let continuation = pendingConfirmation
         pendingConfirmation = nil
         confirmation = nil
@@ -165,6 +188,7 @@ final class MenuBarViewModel {
     /// Stops the running apply, declining any open question. The applier restores the Dock if it
     /// had already started writing.
     func cancelOperation() {
+        showsDiffSheet = false
         resolveConfirmation(false)
         operation?.cancel()
     }

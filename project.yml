@@ -95,6 +95,7 @@ targets:
       - path: App/ViewModels
       - path: App/Editor
       - path: App/Settings
+      - path: App/Sheets
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore

@@ -13,7 +13,10 @@ struct MenuBarContentView: View {
             header
 
             if let confirmation = model.confirmation {
-                ConfirmationCard(confirmation: confirmation) { model.resolveConfirmation($0) }
+                ConfirmationCard(
+                    confirmation: confirmation,
+                    onReviewDiff: { model.showsDiffSheet = true }
+                ) { model.resolveConfirmation($0) }
             } else if let activity = model.activity {
                 ActivityCard(activity: activity, canCancel: model.confirmation == nil) {
                     model.cancelOperation()
@@ -30,6 +33,15 @@ struct MenuBarContentView: View {
         }
         .padding(14)
         .frame(width: 320)
+        .sheet(isPresented: $model.showsDiffSheet) {
+            if let preview = model.confirmation?.preview {
+                DiffSheetView(
+                    preview: preview,
+                    onApply: { model.resolveConfirmation(true) },
+                    onCancel: { model.resolveConfirmation(false) }
+                )
+            }
+        }
         .task { await model.refresh() }
     }
 
@@ -310,6 +322,7 @@ private struct ActivityCard: View {
 
 private struct ConfirmationCard: View {
     let confirmation: MenuBarViewModel.Confirmation
+    var onReviewDiff: () -> Void = {}
     let answer: (Bool) -> Void
 
     var body: some View {
@@ -330,6 +343,10 @@ private struct ConfirmationCard: View {
                     Button("Cancel") { answer(false) }
                         .keyboardShortcut(.cancelAction)
                     Spacer()
+                    if confirmation.preview != nil {
+                        Button("Review Changes…") { onReviewDiff() }
+                            .controlSize(.small)
+                    }
                     Button("Apply Anyway") { answer(true) }
                         .keyboardShortcut(.defaultAction)
                 }
