@@ -4,6 +4,7 @@ import SwiftUI
 
 struct SettingsView: View {
     @Bindable var model: SettingsViewModel
+    @Bindable var updates: UpdateViewModel
 
     var body: some View {
         Form {
@@ -20,6 +21,25 @@ struct SettingsView: View {
                         .font(.caption)
                         .foregroundStyle(.red)
                 }
+            }
+
+            Section("Updates") {
+                Toggle("Check for updates automatically", isOn: $updates.autoCheckEnabled)
+                HStack {
+                    Button("Check for updates now") { Task { await updates.checkNow() } }
+                        .disabled(updates.isChecking)
+                    if updates.isChecking { ProgressView().controlSize(.small) }
+                    if let message = updates.manualMessage {
+                        Text(message).font(.caption).foregroundStyle(.secondary)
+                    }
+                }
+                if updates.availableUpdate != nil {
+                    Button("View release page") { updates.openReleasePage() }
+                }
+                Text("Looks at GitHub Releases at most once a day. Nothing is downloaded or installed for you. If you installed with Homebrew, run `brew upgrade --cask oh-my-dock`.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             Section("Profile hotkeys") {

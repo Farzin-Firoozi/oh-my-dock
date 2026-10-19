@@ -5,6 +5,7 @@ import SwiftUI
 /// The `.window`-style popover: grouped cards on the system material, like Control Center.
 struct MenuBarContentView: View {
     @Bindable var model: MenuBarViewModel
+    var updates: UpdateViewModel
     @Environment(\.openWindow) private var openWindow
     @FocusState private var nameFieldFocused: Bool
     /// What the diff sheet shows. Copied when the sheet opens and kept until it has closed, so the
@@ -42,6 +43,10 @@ struct MenuBarContentView: View {
                 BannerCard(banner: banner) { model.dismissBanner() }
             }
 
+            if let update = updates.availableUpdate {
+                UpdateCard(version: update.version.description) { updates.openReleasePage() }
+            }
+
             profilesCard
             actionsCard
             footer
@@ -58,7 +63,10 @@ struct MenuBarContentView: View {
                 )
             }
         }
-        .task { await model.refresh() }
+        .task {
+            await model.refresh()
+            await updates.checkIfDue()
+        }
     }
 
     private var header: some View {
@@ -366,6 +374,26 @@ private struct ConfirmationCard: View {
                     Button("Apply Anyway") { answer(true) }
                         .keyboardShortcut(.defaultAction)
                 }
+            }
+            .padding(10)
+        }
+    }
+}
+
+private struct UpdateCard: View {
+    let version: String
+    let open: () -> Void
+
+    var body: some View {
+        Card {
+            HStack(spacing: 8) {
+                Image(systemName: "arrow.down.circle.fill")
+                    .foregroundStyle(.tint)
+                Text("Update available: v\(version)")
+                    .font(.callout.weight(.medium))
+                Spacer(minLength: 4)
+                Button("View Release", action: open)
+                    .controlSize(.small)
             }
             .padding(10)
         }

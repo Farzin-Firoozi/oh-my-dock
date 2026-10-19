@@ -13,12 +13,13 @@ struct OhMyDockApp: App {
         Task {
             await shell.menuBar.start()
             await shell.settings.load()
+            await shell.updates.checkIfDue()
         }
     }
 
     var body: some Scene {
         MenuBarExtra("oh-my-dock", systemImage: "dock.rectangle") {
-            MenuBarContentView(model: shell.menuBar)
+            MenuBarContentView(model: shell.menuBar, updates: shell.updates)
                 .onChange(of: shell.menuBar.profiles) { _, profiles in
                     shell.hotkeys.sync(profiles: profiles)
                 }
@@ -26,7 +27,7 @@ struct OhMyDockApp: App {
         .menuBarExtraStyle(.window)
 
         Settings {
-            SettingsView(model: shell.settings)
+            SettingsView(model: shell.settings, updates: shell.updates)
         }
 
         Window("Editor", id: "editor") { EditorWindow(store: shell.profiles) }

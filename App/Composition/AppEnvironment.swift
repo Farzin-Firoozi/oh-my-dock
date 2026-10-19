@@ -9,6 +9,7 @@ enum AppEnvironment {
         let hotkeys: HotkeyService
         let settings: SettingsViewModel
         let history: HistoryViewModel
+        let updates: UpdateViewModel
         /// The one profile store; the editor and settings share it with the menu bar.
         let profiles: ProfileStore
         /// Serialises every live-Dock mutation across the menu bar and history.
@@ -49,7 +50,12 @@ enum AppEnvironment {
             gate: gate,
             changes: changes
         )
-        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, profiles: profiles, gate: gate)
+        let updates = UpdateViewModel(
+            checker: UpdateChecker(fetcher: URLSessionFetcher()),
+            currentVersion: AppVersion.current,
+            opener: WorkspaceReleasePageOpener()
+        )
+        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, updates: updates, profiles: profiles, gate: gate)
     }
 
     private static func makeLiveBackend() -> any DockBackend {
