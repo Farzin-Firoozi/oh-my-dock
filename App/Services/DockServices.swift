@@ -5,6 +5,12 @@ import OhMyDockCore
 protocol ProfileLibrary: Sendable {
     func profiles() async -> [Profile]
     func save(_ profile: Profile) async throws
+    /// Read-modify-write of one stored profile in a single store call.
+    @discardableResult
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) async throws -> Profile
+    /// Sets or clears a profile's hotkey; refuses one another profile already uses.
+    @discardableResult
+    func setHotkey(id: UUID, to hotkey: Hotkey?) async throws -> Profile
 }
 
 extension ProfileStore: ProfileLibrary {

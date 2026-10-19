@@ -216,4 +216,75 @@ import Testing
         let permissions = try #require(attrs[.posixPermissions] as? Int)
         return permissions & 0o777
     }
+
+    @Test func updateAppliesTheTransformToTheLatestStoredProfile() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let store = ProfileStore(rootDirectory: root)
+        let original = Profile(name: "Work")
+        try await store.save(original)
+
+        // Another writer changes the hotkey after this caller loaded `original`.
+        let hotkey = Hotkey(keyCode: 18, modifiers: [.command])
+        try await store.setHotkey(id: original.id, to: hotkey)
+        let updated = try await store.update(id: original.id) { $0.name = "Renamed" }
+
+        #expect(updated.name == "Renamed")
+        #expect(updated.hotkey == hotkey)
+        #expect(try await store.load(id: original.id) == updated)
+    }
+
+    @Test func updateValidatesAndLeavesTheStoredProfileUntouchedOnFailure() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let store = ProfileStore(rootDirectory: root)
+        let profile = Profile(name: "Work")
+        try await store.save(profile)
+
+        await #expect(throws: ProfileValidationError.self) {
+            try await store.update(id: profile.id) { $0.name = "" }
+        }
+        #expect(try await store.load(id: profile.id).name == "Work")
+    }
+
+    @Test func updateKeepsTheProfileIdAndFailsForMissingProfiles() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let store = ProfileStore(rootDirectory: root)
+        let profile = Profile(name: "Work")
+        try await store.save(profile)
+        let updated = try await store.update(id: profile.id) { $0.id = UUID() }
+        #expect(updated.id == profile.id)
+
+        let missing = UUID()
+        await #expect(throws: ProfileStoreError.profileNotFound(missing)) {
+            try await store.update(id: missing) { _ in }
+        }
+    }
+
+    @Test func setHotkeyRejectsAShortcutAnotherProfileUses() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let store = ProfileStore(rootDirectory: root)
+        let hotkey = Hotkey(keyCode: 18, modifiers: [.command, .option])
+        let work = Profile(name: "Work", hotkey: hotkey)
+        let play = Profile(name: "Play")
+        try await store.save(work)
+        try await store.save(play)
+
+        await #expect(throws: ProfileStoreError.hotkeyInUse(profileName: "Work")) {
+            try await store.setHotkey(id: play.id, to: hotkey)
+        }
+        #expect(try await store.load(id: play.id).hotkey == nil)
+
+        // Re-recording a profile's own shortcut, and clearing, are fine.
+        try await store.setHotkey(id: work.id, to: hotkey)
+        try await store.setHotkey(id: work.id, to: nil)
+        try await store.setHotkey(id: play.id, to: hotkey)
+        #expect(try await store.load(id: play.id).hotkey == hotkey)
+    }
 }

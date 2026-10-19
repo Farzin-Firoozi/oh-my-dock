@@ -25,8 +25,17 @@ public struct DefaultProfileMigrator: ProfileMigrator {
 
 // MARK: - Store
 
-public enum ProfileStoreError: Error, Hashable, Sendable {
+public enum ProfileStoreError: Error, Hashable, Sendable, LocalizedError {
     case profileNotFound(UUID)
+    /// Another profile already uses this hotkey; `profileName` is that profile.
+    case hotkeyInUse(profileName: String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .profileNotFound: "That profile no longer exists."
+        case let .hotkeyInUse(name): "That shortcut is already used by “\(name)”."
+        }
+    }
 }
 
 public actor ProfileStore {
@@ -100,6 +109,29 @@ public actor ProfileStore {
         let data = try profile.jsonData()
         let url = profileURL(for: profile.id)
         try writeAtomically(data: data, to: url)
+    }
+
+    /// Loads the stored profile, applies `transform`, validates and saves it, all within one
+    /// store call, so concurrent writers each change their own fields instead of overwriting
+    /// each other with stale whole profiles. The profile keeps its id whatever `transform` does.
+    @discardableResult
+    public func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
+        var profile = try load(id: id)
+        try transform(&profile)
+        profile.id = id
+        try save(profile)
+        return profile
+    }
+
+    /// Sets or clears the hotkey of `id`. Fails with `hotkeyInUse` when another profile has it.
+    @discardableResult
+    public func setHotkey(id: UUID, to hotkey: Hotkey?) throws -> Profile {
+        if let hotkey,
+           let other = list().profiles.first(where: { $0.id != id && $0.hotkey == hotkey })
+        {
+            throw ProfileStoreError.hotkeyInUse(profileName: other.name)
+        }
+        return try update(id: id) { $0.hotkey = hotkey }
     }
 
     public func delete(id: UUID) throws {

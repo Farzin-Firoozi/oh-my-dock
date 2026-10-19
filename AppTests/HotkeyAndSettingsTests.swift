@@ -59,6 +59,29 @@ private actor FakeSettingsLibrary: ProfileLibrary {
             stored.append(profile)
         }
     }
+
+    private(set) var failSetHotkey: (any Error)?
+
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
+        guard let index = stored.firstIndex(where: { $0.id == id }) else { throw ProfileStoreError.profileNotFound(id) }
+        try transform(&stored[index])
+        return stored[index]
+    }
+
+    func setHotkey(id: UUID, to hotkey: Hotkey?) throws -> Profile {
+        if let failSetHotkey { throw failSetHotkey }
+        if let hotkey, let other = stored.first(where: { $0.id != id && $0.hotkey == hotkey }) {
+            throw ProfileStoreError.hotkeyInUse(profileName: other.name)
+        }
+        return try update(id: id) { $0.hotkey = hotkey }
+    }
+
+    func failHotkeySaves(with error: any Error) { failSetHotkey = error }
+
+    /// Another writer (the editor) renames a profile behind the settings window's back.
+    func rename(_ id: UUID, to name: String) {
+        if let index = stored.firstIndex(where: { $0.id == id }) { stored[index].name = name }
+    }
 }
 
 private actor RecordingApplier: ProfileApplying {
@@ -179,6 +202,59 @@ private actor RecordingApplier: ProfileApplying {
         let saved = await library.profiles().first
         #expect(saved?.hotkey == hotkey)
         #expect(registrar.registrations.first?.1 == hotkey)
+    }
+
+    @Test func setHotkeyKeepsEditsAnotherWriterMadeSinceLoad() async {
+        let hotkeys = HotkeyService(registrar: FakeHotkeyRegistrar())
+        let profile = Profile(name: "Work")
+        let library = FakeSettingsLibrary([profile])
+        let model = SettingsViewModel(library: library, launchAtLogin: FakeLaunchAtLoginService(), hotkeys: hotkeys)
+        await model.load()
+
+        await library.rename(profile.id, to: "Renamed in editor")
+        await model.setHotkey(for: profile.id, to: Hotkey(keyCode: 2, modifiers: [.control]))
+
+        let saved = await library.profiles().first
+        #expect(saved?.name == "Renamed in editor")
+        #expect(saved?.hotkey == Hotkey(keyCode: 2, modifiers: [.control]))
+        #expect(model.profiles.first?.name == "Renamed in editor")
+    }
+
+    @Test func duplicateShortcutIsRejectedAndSurfaced() async {
+        let registrar = FakeHotkeyRegistrar()
+        let hotkey = Hotkey(keyCode: 2, modifiers: [.control])
+        let work = Profile(name: "Work", hotkey: hotkey)
+        let play = Profile(name: "Play")
+        let library = FakeSettingsLibrary([work, play])
+        let model = SettingsViewModel(
+            library: library, launchAtLogin: FakeLaunchAtLoginService(), hotkeys: HotkeyService(registrar: registrar)
+        )
+        await model.load()
+        let token = model.hotkeyResetToken
+
+        await model.setHotkey(for: play.id, to: hotkey)
+
+        #expect(model.hotkeyError?.contains("Work") == true)
+        #expect(model.hotkeyResetToken == token + 1)
+        #expect(await library.profiles().first { $0.id == play.id }?.hotkey == nil)
+
+        await model.setHotkey(for: play.id, to: Hotkey(keyCode: 3, modifiers: [.control]))
+        #expect(model.hotkeyError == nil)
+    }
+
+    @Test func failedHotkeySaveIsSurfaced() async {
+        let profile = Profile(name: "Work")
+        let library = FakeSettingsLibrary([profile])
+        await library.failHotkeySaves(with: LaunchError())
+        let model = SettingsViewModel(
+            library: library, launchAtLogin: FakeLaunchAtLoginService(),
+            hotkeys: HotkeyService(registrar: FakeHotkeyRegistrar())
+        )
+        await model.load()
+
+        await model.setHotkey(for: profile.id, to: Hotkey(keyCode: 2, modifiers: [.control]))
+
+        #expect(model.hotkeyError == "launch failed")
     }
 
     @Test func launchAtLoginToggleUsesService() {

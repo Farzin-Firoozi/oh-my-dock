@@ -50,6 +50,12 @@ private struct SlowHistory: SnapshotHistoryManaging {
 private actor StaticLibrary: ProfileLibrary {
     func profiles() -> [Profile] { [] }
     func save(_ profile: Profile) throws {}
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
+        throw ProfileStoreError.profileNotFound(id)
+    }
+    func setHotkey(id: UUID, to hotkey: Hotkey?) throws -> Profile {
+        throw ProfileStoreError.profileNotFound(id)
+    }
 }
 
 private func snapshot() -> Snapshot {

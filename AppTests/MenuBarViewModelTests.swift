@@ -21,6 +21,16 @@ private actor FakeLibrary: ProfileLibrary {
         stored.append(profile)
     }
 
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
+        guard let index = stored.firstIndex(where: { $0.id == id }) else { throw ProfileStoreError.profileNotFound(id) }
+        try transform(&stored[index])
+        return stored[index]
+    }
+
+    func setHotkey(id: UUID, to hotkey: Hotkey?) throws -> Profile {
+        try update(id: id) { $0.hotkey = hotkey }
+    }
+
     func failSaves() { failSave = true }
 }
 

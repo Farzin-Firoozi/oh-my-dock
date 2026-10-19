@@ -23,12 +23,17 @@ struct SettingsView: View {
             }
 
             Section("Profile hotkeys") {
+                if let error = model.hotkeyError {
+                    Text(error)
+                        .font(.caption)
+                        .foregroundStyle(.red)
+                }
                 if model.profiles.isEmpty {
                     Text("No profiles yet. Save a Dock layout from the menu bar first.")
                         .foregroundStyle(.secondary)
                 } else {
                     ForEach(model.profiles) { profile in
-                        ProfileHotkeyRow(profile: profile) { hotkey in
+                        ProfileHotkeyRow(profile: profile, resetToken: model.hotkeyResetToken) { hotkey in
                             Task { await model.setHotkey(for: profile.id, to: hotkey) }
                         }
                     }
@@ -43,6 +48,7 @@ struct SettingsView: View {
 
 private struct ProfileHotkeyRow: View {
     let profile: Profile
+    let resetToken: Int
     let onChange: (Hotkey?) -> Void
 
     @State private var shortcut: KeyboardShortcuts.Shortcut?
@@ -62,6 +68,9 @@ private struct ProfileHotkeyRow: View {
         }
         .onChange(of: profile.hotkey) { _, hotkey in
             shortcut = HotkeyBridge.shortcut(from: hotkey)
+        }
+        .onChange(of: resetToken) {
+            shortcut = HotkeyBridge.shortcut(from: profile.hotkey)
         }
     }
 }

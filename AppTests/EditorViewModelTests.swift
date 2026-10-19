@@ -27,6 +27,23 @@ actor FakeStore: EditorProfileStore {
         saved[profile.id] = profile
     }
 
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
+        if failNextSave {
+            failNextSave = false
+            throw Boom()
+        }
+        guard var profile = saved[id] else { throw ProfileStoreError.profileNotFound(id) }
+        try transform(&profile)
+        saveCount += 1
+        saved[id] = profile
+        return profile
+    }
+
+    /// Changes a stored profile without going through the editor, like another writer would.
+    func setStoredHotkey(_ id: UUID, _ hotkey: Hotkey?) {
+        saved[id]?.hotkey = hotkey
+    }
+
     func delete(id: UUID) throws {
         deleted.append(id)
         saved[id] = nil
@@ -203,6 +220,51 @@ private func makeModel(_ profiles: [Profile] = []) async -> (EditorViewModel, Fa
             Issue.record("expected persistence error"); return
         }
         #expect(model.selectedProfile?.apps.isEmpty == true)
+    }
+
+    @Test func editsKeepAHotkeySetByAnotherWriter() async {
+        let profile = Profile(name: "P")
+        let (model, store) = await makeModel([profile])
+        let hotkey = Hotkey(keyCode: 18, modifiers: [.command])
+
+        // Settings records a hotkey after the editor loaded its copy.
+        await store.setStoredHotkey(profile.id, hotkey)
+        model.addSpacer(in: .apps)
+        await model.flush()
+
+        let stored = await store.saved[profile.id]
+        #expect(stored?.hotkey == hotkey)
+        #expect(stored?.apps.count == 1)
+    }
+
+    @Test func failedSaveDropsQueuedSavesForTheStaleValue() async {
+        let (model, store) = await makeModel([Profile(name: "P")])
+        await store.failOnNextSave()
+        model.addSpacer(in: .apps)
+        model.addSpacer(in: .apps)
+        await model.flush()
+
+        guard case .persistence? = model.error else {
+            Issue.record("expected persistence error"); return
+        }
+        // The second write carried the first (failed) edit too; it must not have been replayed.
+        #expect(await store.saveCount == 0)
+        #expect(await store.saved.values.first?.apps.isEmpty == true)
+        #expect(model.selectedProfile?.apps.isEmpty == true)
+
+        // Edits after the failure are written normally.
+        model.addSpacer(in: .apps)
+        await model.flush()
+        #expect(await store.saveCount == 1)
+    }
+
+    @Test func duplicatedProfileDoesNotShareTheHotkey() async {
+        let source = Profile(name: "P", hotkey: Hotkey(keyCode: 18, modifiers: [.command]))
+        let (model, store) = await makeModel([source])
+        let copy = model.duplicateProfile(id: source.id)
+        await model.flush()
+        #expect(await store.saved[copy!]?.hotkey == nil)
+        #expect(await store.saved[source.id]?.hotkey == source.hotkey)
     }
 
     @Test func addURLStringRequiresHTTPS() async {

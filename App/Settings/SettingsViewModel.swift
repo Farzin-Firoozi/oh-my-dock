@@ -8,6 +8,10 @@ final class SettingsViewModel {
     private(set) var profiles: [Profile] = []
     var launchAtLogin = false
     private(set) var launchAtLoginError: String?
+    /// Why the last shortcut change was refused (a duplicate, a failed save), if it was.
+    private(set) var hotkeyError: String?
+    /// Bumped when a recorder's shortcut was rejected so its row resets to the stored value.
+    private(set) var hotkeyResetToken = 0
 
     @ObservationIgnored private let library: any ProfileLibrary
     @ObservationIgnored private let launchAtLoginService: any LaunchAtLoginManaging
@@ -39,15 +43,17 @@ final class SettingsViewModel {
         }
     }
 
+    /// Saves `hotkey` for a profile. The store updates the latest stored profile, so this never
+    /// overwrites edits made elsewhere, and refuses a shortcut another profile already uses.
     func setHotkey(for profileID: UUID, to hotkey: Hotkey?) async {
-        guard var profile = profiles.first(where: { $0.id == profileID }) else { return }
-        profile.hotkey = hotkey
         do {
-            try await library.save(profile)
-            profiles = await library.profiles()
-            hotkeys.sync(profiles: profiles)
+            try await library.setHotkey(id: profileID, to: hotkey)
+            hotkeyError = nil
         } catch {
-            // Leave the recorder binding; the user can try again after fixing validation issues.
+            hotkeyError = (error as? LocalizedError)?.errorDescription ?? "Could not save the shortcut: \(error)"
+            hotkeyResetToken += 1
         }
+        profiles = await library.profiles()
+        hotkeys.sync(profiles: profiles)
     }
 }

@@ -6,6 +6,10 @@ import OhMyDockCore
 protocol EditorProfileStore: Sendable {
     func list() async -> ProfileStore.ListResult
     func save(_ profile: Profile) async throws
+    /// Read-modify-write of the stored profile, so an edit never overwrites fields (such as the
+    /// hotkey) that another writer changed since the editor loaded it.
+    @discardableResult
+    func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) async throws -> Profile
     func delete(id: UUID) async throws
 }
 
@@ -81,6 +85,9 @@ final class EditorViewModel {
 
     @ObservationIgnored private let store: any EditorProfileStore
     @ObservationIgnored private var persistence: Task<Void, Never>?
+    /// Bumped when a write fails. Writes queued under an older epoch were made against a state
+    /// the failure invalidated, so they are dropped instead of replaying stale values.
+    @ObservationIgnored private var writeEpoch = 0
 
     init(store: any EditorProfileStore) {
         self.store = store
@@ -143,6 +150,8 @@ final class EditorViewModel {
         var copy = source
         copy.id = UUID()
         copy.name = uniqueName(base)
+        // A hotkey belongs to one profile.
+        copy.hotkey = nil
         guard validated(copy) else { return nil }
         insert(copy)
         return copy.id
@@ -162,7 +171,7 @@ final class EditorViewModel {
         guard validated(profile) else { return false }
         profiles[index] = profile
         sortProfiles()
-        persist(profile)
+        persistEdit(of: profile)
         return true
     }
 
@@ -296,7 +305,7 @@ final class EditorViewModel {
         edit(&profile)
         guard validated(profile) else { return false }
         profiles[index] = profile
-        persist(profile)
+        persistEdit(of: profile)
         return true
     }
 
@@ -331,20 +340,41 @@ final class EditorViewModel {
         return "\(base) \(n)"
     }
 
+    /// Writes a profile the store has never seen.
     private func persist(_ profile: Profile) {
         enqueue { store in try await store.save(profile) }
     }
 
+    /// Writes the editor's own fields (name and tiles) into the latest stored profile. Everything
+    /// else (hotkey, prefs, switching options) stays as whoever last wrote it left it.
+    private func persistEdit(of profile: Profile) {
+        let id = profile.id
+        let name = profile.name
+        let apps = profile.apps
+        let others = profile.others
+        enqueue { store in
+            try await store.update(id: id) {
+                $0.name = name
+                $0.apps = apps
+                $0.others = others
+            }
+        }
+    }
+
     /// Runs store writes strictly in order. A failed write is reported and the in-memory state is
     /// reloaded from the store, so the window never keeps showing something that isn't on disk.
+    /// Writes queued before the failure are dropped: they carry values the reload just discarded.
     private func enqueue(_ write: @escaping @Sendable (any EditorProfileStore) async throws -> Void) {
         let previous = persistence
+        let epoch = writeEpoch
         persistence = Task { [store] in
             await previous?.value
+            guard epoch == self.writeEpoch else { return }
             do {
                 try await write(store)
             } catch {
-                self.error = .persistence(String(describing: error))
+                self.writeEpoch += 1
+                self.error = .persistence((error as? LocalizedError)?.errorDescription ?? String(describing: error))
                 await self.load()
             }
         }
