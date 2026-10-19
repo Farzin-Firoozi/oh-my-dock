@@ -84,13 +84,32 @@ public struct DockutilBackend: DockBackend {
     }
 
     public func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight {
-        let prepared = try prepare(operations)
+        try await preflight(operations, from: try readState())
+    }
+
+    public func preflight(_ operations: [DockOperation], from base: DockState) async throws -> DockWritePreflight {
+        let prepared = try prepare(operations, before: base)
         return DockWritePreflight(clearsRecentApps: prepared.plan.isFullRewrite)
     }
 
     public func apply(_ operations: [DockOperation]) async throws {
-        let (location, expected, plan) = try prepare(operations)
+        try await write(operations, expecting: nil)
+    }
+
+    public func apply(_ operations: [DockOperation], expecting base: DockState) async throws {
+        try await write(operations, expecting: base)
+    }
+
+    /// Reads the Dock, refuses when it is not `base`, plans against what was read and writes. The
+    /// cancellation check comes after the last read and before the first command, so a cancelled
+    /// task writes nothing.
+    private func write(_ operations: [DockOperation], expecting base: DockState?) async throws {
+        let location = try validatedLocation()
+        let before = try readState()
+        if let base, before != base { throw DockBackendError.dockChanged }
+        let (_, expected, plan) = try prepare(operations, before: before)
         guard !plan.commands.isEmpty else { return }
+        try Task.checkCancellation()
 
         for (offset, command) in plan.commands.enumerated() {
             try await run(command, location: location, number: offset + 1, of: plan.commands.count)
@@ -105,10 +124,10 @@ public struct DockutilBackend: DockBackend {
     /// Everything that can be refused without writing: the target, the operations' indices and
     /// what dockutil can express. Runs before the first command.
     private func prepare(
-        _ operations: [DockOperation]
+        _ operations: [DockOperation],
+        before: DockState
     ) throws -> (location: String?, expected: DockState, plan: DockutilPlan) {
         let location = try validatedLocation()
-        let before = try readState()
         let expected = try before.applying(operations)
         let plan = try DockutilPlanner.plan(operations: operations, from: before)
         return (location, expected, plan)

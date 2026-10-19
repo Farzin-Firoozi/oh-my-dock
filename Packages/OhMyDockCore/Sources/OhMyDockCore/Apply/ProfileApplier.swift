@@ -147,7 +147,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 /// 4. Snapshot the Dock, then re-read it. When it no longer equals the state the plan was
 ///    computed from (someone edited the Dock meanwhile), throw `ApplyError.dockChanged`: the
 ///    plan's indices would be stale, and the user confirmed a different plan.
-/// 5. `backend.apply`, then one `restarter.restart()`, then a re-read of the Dock: the restarted
+/// 5. `backend.apply(_:expecting:)`, which reads the Dock again itself and refuses with
+///    `ApplyError.dockChanged` (nothing written, no restore or restart, snapshot discarded) when it
+///    is not the state the plan was computed from. Then one `restarter.restart()`, then a re-read of the Dock: the restarted
 ///    Dock must still hold what was written (it loads the preferences and may rewrite them).
 /// 6. Any error from 5 (including that re-read not matching), or a cancellation seen after the backend finished: restore the snapshot,
 ///    restart once and re-read the Dock, which must equal the pre-apply Dock, then throw
@@ -345,7 +347,21 @@ public actor ProfileApplier {
         // Point of no return: from here every exit leaves the Dock restored or fully applied.
         var failure: (any Error)?
         do {
-            try await backend.apply(plan.operations)
+            do {
+                // The backend reads the Dock itself right before its first write and refuses when
+                // it is not the state the plan was computed from, so no edit can slip in between
+                // the checks above and the write.
+                try await backend.apply(plan.operations, expecting: preview.current)
+            } catch DockBackendError.dockChanged {
+                // Refused before the first write: nothing to restore, and the backup is of an
+                // unchanged Dock.
+                await discard(snapshot)
+                throw ApplyError.dockChanged
+            } catch is CancellationError {
+                // Raised after its last read and before its first write (see `DockBackend`).
+                await discard(snapshot)
+                return .cancelled(rolledBack: false)
+            }
             if !Task.isCancelled {
                 try await restarter.restart()
             }
@@ -356,6 +372,8 @@ public actor ProfileApplier {
                     throw DockBackendError.verificationFailed(expected: expected, actual: actual)
                 }
             }
+        } catch let error as ApplyError {
+            throw error
         } catch {
             failure = error
         }
@@ -490,7 +508,7 @@ public actor ProfileApplier {
         var clearsRecentApps = false
         if !plan.unsatisfiable, !plan.isEmpty {
             do {
-                clearsRecentApps = try await backend.preflight(plan.operations).clearsRecentApps
+                clearsRecentApps = try await backend.preflight(plan.operations, from: current).clearsRecentApps
             } catch is CancellationError {
                 throw CancellationError()
             } catch {

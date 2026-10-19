@@ -893,8 +893,9 @@ struct ProfileApplierTests {
             Issue.record("Expected .applied, got \(result)")
             return
         }
-        // Plan, early check, late check, and the one after the restart.
-        #expect(await env.backend.readCount == 4)
+        // Plan, early check, late check, the backend's own read before writing, and the one after
+        // the restart.
+        #expect(await env.backend.readCount == 5)
     }
 
     @Test func failedRestoreReportsTheSnapshotAndDoesNotRestart() async throws {
@@ -1021,6 +1022,63 @@ struct ProfileApplierTests {
         #expect(await env.restarter.count == 0)
         #expect(await env.io.imports.isEmpty)
         // The backup of a Dock that was never written is not kept.
+        #expect(await env.snapshots.isEmpty)
+    }
+
+    @Test func dockEditedBetweenTheLastCheckAndTheWriteIsRefusedWithoutWriting() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let backend = env.backend
+        // An edit after the applier's own checks, before the backend's read-and-write.
+        await backend.onApplyBeforeRead { await backend.setState(DockState(apps: [calendarApp, notes])) }
+
+        let error = await applyError {
+            try await env.applier().apply(profile(apps: [calculator]))
+        }
+
+        guard case .dockChanged? = error else {
+            Issue.record("Expected dockChanged, got \(String(describing: error))")
+            return
+        }
+        #expect(await backend.appliedBatches.isEmpty)
+        #expect(await backend.state == DockState(apps: [calendarApp, notes]))
+        #expect(await env.restarter.count == 0)
+        #expect(await env.io.imports.isEmpty)
+        #expect(await env.snapshots.isEmpty)
+    }
+
+    @Test func fullRewriteWithAChangedDockIsRefused() async throws {
+        let env = try Env(current: DockState(apps: [calculator, .spacer(.normal), notes]))
+        defer { env.cleanup() }
+        let backend = env.backend
+        await backend.onApplyBeforeRead { await backend.setState(DockState(apps: [notes])) }
+
+        let error = await applyError {
+            try await env.applier().apply(profile(apps: [calculator, notes]))
+        }
+
+        guard case .dockChanged? = error else {
+            Issue.record("Expected dockChanged, got \(String(describing: error))")
+            return
+        }
+        #expect(await backend.appliedBatches.isEmpty)
+        #expect(await backend.state == DockState(apps: [notes]))
+        #expect(await env.restarter.count == 0)
+        #expect(await env.snapshots.isEmpty)
+    }
+
+    @Test func cancellationDuringTheBackendsReadWritesNothing() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let backend = env.backend
+        let applier = env.applier()
+        let task = Task { try await applier.apply(profile(apps: [calculator])) }
+        await backend.onApplyAfterRead { task.cancel() }
+
+        #expect(try await task.value == .cancelled(rolledBack: false))
+        #expect(await backend.appliedBatches.isEmpty)
+        #expect(await env.restarter.count == 0)
+        #expect(await env.io.imports.isEmpty)
         #expect(await env.snapshots.isEmpty)
     }
 

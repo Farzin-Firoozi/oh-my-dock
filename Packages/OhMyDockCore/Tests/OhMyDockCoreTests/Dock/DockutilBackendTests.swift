@@ -647,4 +647,58 @@ import Testing
             #expect(!arguments.contains { $0.hasPrefix("~") })
         }
     }
+
+    // MARK: - Expected base
+
+    @Test func dockThatDiffersFromTheBaseIsRefusedBeforeAnyCommand() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        let backend = h.backend(reading: [DockState(apps: [notes, calendar])])
+
+        await #expect(throws: DockBackendError.dockChanged) {
+            try await backend.apply(
+                [.insert(calc, section: .apps, index: 0)],
+                expecting: DockState(apps: [notes])
+            )
+        }
+        #expect(h.runner.calls.isEmpty)
+    }
+
+    @Test func dockThatMatchesTheBaseIsWritten() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        let before = DockState(apps: [notes])
+        let ops: [DockOperation] = [.insert(calc, section: .apps, index: 0)]
+        let backend = h.backend(reading: [before, try before.applying(ops)])
+
+        try await backend.apply(ops, expecting: before)
+
+        #expect(h.runner.calls.count == 1)
+    }
+
+    @Test func cancellationAfterTheReadWritesNothing() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        let before = DockState(apps: [notes])
+        let backend = h.backend(reading: [before])
+        let task = Task {
+            try await backend.apply([.insert(calc, section: .apps, index: 0)], expecting: before)
+        }
+        task.cancel()
+
+        await #expect(throws: CancellationError.self) { try await task.value }
+        #expect(h.runner.calls.isEmpty)
+    }
+
+    @Test func preflightPlansAgainstTheGivenBaseWithoutReading() async throws {
+        let h = try FakeDockHarness()
+        defer { h.cleanup() }
+        let backend = h.backend(reading: [DockState()])
+        let base = DockState(apps: [calc, .spacer(.normal), notes])
+
+        let preflight = try await backend.preflight([.remove(section: .apps, index: 1)], from: base)
+
+        #expect(preflight.clearsRecentApps)
+        #expect(h.runner.calls.isEmpty)
+    }
 }

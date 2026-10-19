@@ -5,6 +5,8 @@ public actor FakeDockBackend: DockBackend {
     public private(set) var appliedBatches: [[DockOperation]] = []
     public private(set) var readCount: Int = 0
 
+    private var beforeApplyRead: (@Sendable () async -> Void)?
+    private var afterApplyRead: (@Sendable () async -> Void)?
     private var nextApplyError: (any Error & Sendable)?
     private var shouldCorruptNextWrite: Bool = false
     private var corruptNextWriteState: DockState?
@@ -16,6 +18,27 @@ public actor FakeDockBackend: DockBackend {
     public func read() async throws -> DockState {
         readCount += 1
         return state
+    }
+
+    /// Runs `hook` at the start of every `apply(_:expecting:)`, before it reads the Dock: an edit
+    /// made here lands between the caller's own checks and the write.
+    public func onApplyBeforeRead(_ hook: (@Sendable () async -> Void)?) {
+        beforeApplyRead = hook
+    }
+
+    /// Runs `hook` in `apply(_:expecting:)` after it read the Dock, before it decides to write.
+    public func onApplyAfterRead(_ hook: (@Sendable () async -> Void)?) {
+        afterApplyRead = hook
+    }
+
+    public func apply(_ operations: [DockOperation], expecting base: DockState) async throws {
+        await beforeApplyRead?()
+        let current = state
+        readCount += 1
+        await afterApplyRead?()
+        guard current == base else { throw DockBackendError.dockChanged }
+        try Task.checkCancellation()
+        try await apply(operations)
     }
 
     public func apply(_ operations: [DockOperation]) async throws {

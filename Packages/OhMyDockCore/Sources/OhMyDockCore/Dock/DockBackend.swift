@@ -30,9 +30,18 @@ public protocol DockBackend: Sendable {
     /// Checks that `apply(operations)` can run and reports side effects, writing nothing.
     /// Throws what `apply` would throw before its first write.
     func preflight(_ operations: [DockOperation]) async throws -> DockWritePreflight
+    /// Like `preflight(_:)`, but plans against `base` (the Dock the operations were computed
+    /// from) instead of reading the Dock again, so the answer describes exactly that plan.
+    func preflight(_ operations: [DockOperation], from base: DockState) async throws -> DockWritePreflight
     /// Apply operations WITHOUT restarting the Dock. Implementations must verify the
     /// result by re-reading and throw `DockBackendError.verificationFailed` on mismatch.
     func apply(_ operations: [DockOperation]) async throws
+    /// Apply operations that were computed from `base`. The backend reads the Dock itself,
+    /// right before writing, and throws `DockBackendError.dockChanged` without writing anything
+    /// when it differs from `base`: the check and the write cannot be separated by an edit of
+    /// the Dock. Throws `CancellationError`, also without writing, when the task was cancelled
+    /// by the time that read is done. Once it writes, it never throws `CancellationError`.
+    func apply(_ operations: [DockOperation], expecting base: DockState) async throws
 }
 
 public extension DockBackend {
@@ -42,6 +51,18 @@ public extension DockBackend {
         let replacesAll = operations.contains { if case .replaceAll = $0 { true } else { false } }
         return DockWritePreflight(clearsRecentApps: replacesAll)
     }
+
+    func preflight(_ operations: [DockOperation], from base: DockState) async throws -> DockWritePreflight {
+        try await preflight(operations)
+    }
+
+    /// Reads, compares and writes in separate steps, so a backend that can do better (read inside
+    /// its own write) should implement this itself.
+    func apply(_ operations: [DockOperation], expecting base: DockState) async throws {
+        guard try await read() == base else { throw DockBackendError.dockChanged }
+        try Task.checkCancellation()
+        try await apply(operations)
+    }
 }
 
 public enum DockBackendError: Error, Equatable, Sendable {
@@ -49,6 +70,8 @@ public enum DockBackendError: Error, Equatable, Sendable {
     case invalidOperation(String)
     case verificationFailed(expected: DockState, actual: DockState)
     case commandFailed(String)
+    /// The Dock is not the state the operations were computed from. Nothing was written.
+    case dockChanged
 }
 
 public extension DockState {
