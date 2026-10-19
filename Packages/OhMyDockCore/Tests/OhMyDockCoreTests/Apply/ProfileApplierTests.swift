@@ -48,6 +48,33 @@ private actor CountingRestarter: DockRestarting {
     }
 }
 
+/// Wraps a backend and runs a hook right after its Nth `read` returns (1-based), to simulate an
+/// edit that lands between the read and whatever the caller does next.
+private actor ReadHook: DockBackend {
+    let inner: FakeDockBackend
+    private var reads = 0
+    private var hooks: [Int: @Sendable () async -> Void] = [:]
+
+    init(inner: FakeDockBackend) {
+        self.inner = inner
+    }
+
+    func onRead(_ number: Int, _ hook: @escaping @Sendable () async -> Void) {
+        hooks[number] = hook
+    }
+
+    func read() async throws -> DockState {
+        reads += 1
+        let state = try await inner.read()
+        if let hook = hooks[reads] { await hook() }
+        return state
+    }
+
+    func apply(_ operations: [DockOperation]) async throws {
+        try await inner.apply(operations)
+    }
+}
+
 /// One-shot latch: `wait()` returns once `open()` has been called (before or after).
 private actor Gate {
     private var isOpen = false
@@ -526,45 +553,70 @@ struct ProfileApplierTests {
 
     // MARK: Dock changed meanwhile
 
-    @Test func dockChangedWhileConfirmingIsReplanned() async throws {
+    @Test func dockChangedWhileConfirmingIsRefused() async throws {
         let env = try Env(current: DockState(apps: [calendarApp]))
         defer { env.cleanup() }
         let backend = env.backend
         let target = DockState(apps: [calculator, notes])
 
-        let result = try await env.applier().apply(profile(apps: target.apps)) { _ in
-            // Someone edits the Dock while the sheet is open.
-            try? await backend.apply([.insert(notes, section: .apps, index: 1)])
-            return true
+        let error = await applyError {
+            try await env.applier().apply(profile(apps: target.apps)) { _ in
+                // Someone edits the Dock while the sheet is open.
+                try? await backend.apply([.insert(notes, section: .apps, index: 1)])
+                return true
+            }
         }
 
-        guard case .applied = result else {
-            Issue.record("Expected .applied, got \(result)")
+        guard case .dockChanged? = error else {
+            Issue.record("Expected dockChanged, got \(String(describing: error))")
             return
         }
-        #expect(await env.backend.state == target)
-        // The user's edit, then one batch planned against the edited Dock.
-        let batches = await env.backend.appliedBatches
-        #expect(batches.count == 2)
-        #expect(batches.last.map { !$0.contains(.insert(notes, section: .apps, index: 1)) } == true)
+        // Only the concurrent edit was written; the stale plan never ran.
+        #expect(await env.backend.appliedBatches.count == 1)
+        #expect(await env.backend.state == DockState(apps: [calendarApp, notes]))
+        #expect(await env.restarter.count == 0)
+        #expect(await env.io.imports.isEmpty)
     }
 
-    @Test func dockChangedToTheTargetWhileConfirmingIsNoChanges() async throws {
+    @Test func dockChangedToTheTargetWhileConfirmingIsAlsoRefused() async throws {
         let env = try Env(current: DockState(apps: [calendarApp]))
         defer { env.cleanup() }
         let backend = env.backend
 
-        let result = try await env.applier().apply(profile(apps: [calculator])) { _ in
-            try? await backend.apply([.remove(section: .apps, index: 0), .insert(calculator, section: .apps, index: 0)])
-            return true
+        let error = await applyError {
+            try await env.applier().apply(profile(apps: [calculator])) { _ in
+                try? await backend.apply([.remove(section: .apps, index: 0), .insert(calculator, section: .apps, index: 0)])
+                return true
+            }
         }
 
-        guard case .noChanges = result else {
-            Issue.record("Expected .noChanges, got \(result)")
+        guard case .dockChanged? = error else {
+            Issue.record("Expected dockChanged, got \(String(describing: error))")
             return
         }
         #expect(await env.backend.appliedBatches.count == 1)   // only the concurrent edit
         #expect(await env.restarter.count == 0)
+    }
+
+    @Test func dockChangedAfterTheSnapshotIsRefusedWithoutWriting() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]))
+        defer { env.cleanup() }
+        let backend = env.backend
+        let reads = ReadHook(inner: backend)
+        // Reads: plan, early check, late check. An edit after the early check lands before the late one.
+        await reads.onRead(2) { try? await backend.apply([.insert(notes, section: .apps, index: 1)]) }
+
+        let error = await applyError {
+            try await env.applier(backend: reads).apply(profile(apps: [calculator]))
+        }
+
+        guard case .dockChanged? = error else {
+            Issue.record("Expected dockChanged, got \(String(describing: error))")
+            return
+        }
+        #expect(await env.backend.appliedBatches.count == 1)   // only the concurrent edit
+        #expect(await env.restarter.count == 0)
+        #expect(await env.io.imports.isEmpty)
     }
 
     // MARK: Cancellation and concurrency

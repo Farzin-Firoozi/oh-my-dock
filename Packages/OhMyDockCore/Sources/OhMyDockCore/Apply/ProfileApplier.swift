@@ -81,6 +81,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
     case invalidProfile(ProfileValidationError)
     /// The target cannot be produced. Nothing was written or snapshotted.
     case unsatisfiable(issues: [DockPlanIssue])
+    /// The Dock changed after the plan was computed, so its indices may be stale. Nothing was
+    /// written; apply again to plan against the current Dock.
+    case dockChanged
     /// Writing or restarting failed; the Dock was restored from the snapshot and restarted.
     case failedAndRolledBack(original: any Error)
     /// Writing or restarting failed, and so did the rollback. The Dock may be half-written;
@@ -93,6 +96,8 @@ public enum ApplyError: Error, LocalizedError, Sendable {
             "The profile is invalid: \(error)"
         case let .unsatisfiable(issues):
             "The profile cannot be applied: \(issues.map(\.message).joined(separator: "; "))"
+        case .dockChanged:
+            "The Dock changed while the profile was being prepared. Nothing was changed; try again."
         case let .failedAndRolledBack(original):
             "Applying the profile failed and the previous Dock was restored: \(original)"
         case let .rollbackFailed(original, rollback, snapshotID):
@@ -111,7 +116,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 /// 1. Validate the profile, resolve app paths, read the Dock and plan the change.
 /// 2. Unsatisfiable plan: throw. Empty plan: `.noChanges`. No snapshot, no restart.
 /// 3. `confirm` declines: `.cancelled`.
-/// 4. Snapshot the Dock, re-read it (re-planning when it changed meanwhile).
+/// 4. Snapshot the Dock, then re-read it. When it no longer equals the state the plan was
+///    computed from (someone edited the Dock meanwhile), throw `ApplyError.dockChanged`: the
+///    plan's indices would be stale, and the user confirmed a different plan.
 /// 5. `backend.apply`, then one `restarter.restart()`.
 /// 6. Any error from 5, or a cancellation seen after the backend finished: restore the snapshot,
 ///    restart once, then throw `ApplyError.failedAndRolledBack` (or `.cancelled`). If the
@@ -245,20 +252,18 @@ public actor ProfileApplier {
                 if !accepted || Task.isCancelled { return .cancelled(rolledBack: false) }
             }
 
+            // Cheap early exit that also avoids a pointless snapshot.
+            if try await backend.read() != first.current { throw ApplyError.dockChanged }
+
             snapshot = try await snapshots.save(
                 reason: "Before applying profile \(profile.name)",
                 profileName: profile.name
             )
             if Task.isCancelled { return .cancelled(rolledBack: false) }
 
-            // The Dock may have changed while the user was confirming.
-            let now = try await backend.read()
-            preview = now == first.current
-                ? first
-                : makePreview(profile: profile, resolved: resolved, current: now)
-            if preview.plan.unsatisfiable { throw ApplyError.unsatisfiable(issues: preview.plan.issues) }
-            if preview.plan.isEmpty { return .noChanges(preview) }
-            if Task.isCancelled { return .cancelled(rolledBack: false) }
+            // The plan's indices are only valid for the Dock it was computed from.
+            if try await backend.read() != first.current { throw ApplyError.dockChanged }
+            preview = first
 
             plan = preview.plan
             skipped = preview.skipped
