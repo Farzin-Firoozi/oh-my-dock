@@ -8,3 +8,4 @@ xcuserdata/
 .swiftpm/
 App/Resources/Helpers/dockutil
 App/Resources/Helpers/dockutil.version
+dist/

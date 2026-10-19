@@ -1,4 +1,4 @@
-.PHONY: generate test build dockutil hooks
+.PHONY: generate test build dockutil hooks release
 
 generate:
 	xcodegen generate
@@ -15,3 +15,6 @@ dockutil:
 
 hooks:
 	git config core.hooksPath .githooks
+
+release:
+	./scripts/release.sh
