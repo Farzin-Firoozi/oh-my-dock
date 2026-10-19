@@ -174,7 +174,7 @@ extension Profile {
 
     /// Starts with `/` and has no `.` / `..` components. `~` is rejected because
     /// dockutil expands it relative to the plist path, not the home directory.
-    private static func isAbsolutePath(_ path: String) -> Bool {
+    static func isAbsolutePath(_ path: String) -> Bool {
         guard path.hasPrefix("/"), !path.contains("\0") else { return false }
         return !path.split(separator: "/").contains { $0 == "." || $0 == ".." }
     }

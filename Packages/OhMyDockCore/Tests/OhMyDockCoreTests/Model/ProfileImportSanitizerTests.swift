@@ -1,0 +1,244 @@
+import Foundation
+import Testing
+@testable import OhMyDockCore
+
+@Suite struct ProfileImportSanitizerTests {
+    private let home = URL(fileURLWithPath: "/Users/me", isDirectory: true)
+
+    private func sanitize(_ profile: Profile) throws -> SanitizedProfile {
+        try profile.sanitizedForImport(homeDirectory: home)
+    }
+
+    private func https(_ string: String) -> DockItem {
+        .url(URLItem(url: URL(string: string)!))
+    }
+
+    @Test func safeProfilePassesThroughApartFromFreshID() throws {
+        let original = Profile(
+            name: "Work",
+            apps: [.app(AppRef(bundleId: "com.apple.Safari", name: "Safari", path: "/Users/me/Apps/Safari.app", brewCask: "safari")), .spacer(.small)],
+            others: [
+                https("https://example.com/docs"),
+                .folder(FolderItem(path: "/Users/me/Downloads", label: "DL")),
+                .file(FileItem(path: "/Users/me/notes.txt")),
+            ],
+            switching: SwitchingOptions(quitScope: .none, launchHidden: true),
+            hotkey: Hotkey(keyCode: 18, modifiers: [.command])
+        )
+        let result = try sanitize(original)
+        #expect(result.changes == [.idReassigned])
+        #expect(result.profile.id != original.id)
+        var expected = original
+        expected.id = result.profile.id
+        #expect(result.profile == expected)
+    }
+
+    @Test func onlyHTTPSURLsSurvive() throws {
+        let profile = Profile(name: "P", others: [
+            https("https://ok.example.com/a"),
+            https("HTTPS://UPPER.example.com/"),
+            https("http://plain.example.com"),
+            https("file:///etc/passwd"),
+            https("javascript:alert(1)"),
+            https("https://user:pw@evil.example.com/"),
+            https("https://user@evil.example.com/"),
+            https("https:///nohost"),
+            https("ftp://x.example.com"),
+        ])
+        let result = try sanitize(profile)
+        #expect(result.profile.others.count == 2)
+        let dropped = result.changes.compactMap { change -> Int? in
+            if case .droppedItem(.others, let i, .disallowedURL) = change { return i }
+            return nil
+        }
+        #expect(dropped == [2, 3, 4, 5, 6, 7, 8])
+    }
+
+    @Test func pathsMustBeUnderHome() throws {
+        let profile = Profile(name: "P", others: [
+            .folder(FolderItem(path: "/Users/me/Documents")),
+            .folder(FolderItem(path: "/Users/me")),
+            .folder(FolderItem(path: "/Users/mehack/Documents")),
+            .folder(FolderItem(path: "/etc")),
+            .file(FileItem(path: "/Users/me/../root/secret")),
+            .file(FileItem(path: "~/notes.txt")),
+            .file(FileItem(path: "relative/notes.txt")),
+            .file(FileItem(path: "/Users/me/./a.txt")),
+            .file(FileItem(path: "/Users/me/a.txt")),
+        ])
+        let result = try sanitize(profile)
+        #expect(result.profile.others == [
+            .folder(FolderItem(path: "/Users/me/Documents")),
+            .file(FileItem(path: "/Users/me/a.txt")),
+        ])
+        let dropped = result.changes.compactMap { change -> Int? in
+            if case .droppedItem(.others, let i, .disallowedPath) = change { return i }
+            return nil
+        }
+        #expect(dropped == [1, 2, 3, 4, 5, 6, 7])
+    }
+
+    @Test func homeWithTrailingSlashWorks() throws {
+        let profile = Profile(name: "P", others: [.folder(FolderItem(path: "/Users/me/x"))])
+        let result = try profile.sanitizedForImport(homeDirectory: URL(fileURLWithPath: "/Users/me/"))
+        #expect(result.profile.others.count == 1)
+    }
+
+    @Test func appPathOutsideHomeIsClearedAppKept() throws {
+        let profile = Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.a", name: "A", path: "/Applications/A.app")),
+            .app(AppRef(bundleId: "", name: "B", path: "/Applications/B.app")),
+            .app(AppRef(bundleId: "", name: "C", path: "/Users/me/C.app")),
+        ])
+        let result = try sanitize(profile)
+        #expect(result.profile.apps == [
+            .app(AppRef(bundleId: "com.a", name: "A")),
+            .app(AppRef(bundleId: "", name: "C", path: "/Users/me/C.app")),
+        ])
+        #expect(result.changes.contains(.clearedAppPath(.apps, index: 0)))
+        #expect(result.changes.contains(.clearedAppPath(.apps, index: 1)))
+        #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .missingAppIdentity)))
+    }
+
+    @Test func switchingIsDefanged() throws {
+        let profile = Profile(
+            name: "P",
+            apps: [.app(AppRef(bundleId: "com.a", name: "A", launchOnSwitch: true))],
+            switching: SwitchingOptions(quitScope: .allNotInProfile, launchHidden: true, offerForceQuit: true)
+        )
+        let result = try sanitize(profile)
+        #expect(result.profile.switching == SwitchingOptions(quitScope: .none, launchHidden: true, offerForceQuit: false))
+        #expect(result.profile.apps == [.app(AppRef(bundleId: "com.a", name: "A", launchOnSwitch: false))])
+        #expect(result.changes.contains(.forcedQuitScopeNone(was: .allNotInProfile)))
+        #expect(result.changes.contains(.clearedOfferForceQuit))
+        #expect(result.changes.contains(.clearedLaunchOnSwitch(.apps, index: 0)))
+    }
+
+    @Test func previousProfileAppsScopeIsAlsoForcedToNone() throws {
+        let result = try sanitize(Profile(name: "P", switching: SwitchingOptions(quitScope: .previousProfileApps)))
+        #expect(result.profile.switching.quitScope == .none)
+        #expect(result.changes.contains(.forcedQuitScopeNone(was: .previousProfileApps)))
+    }
+
+    @Test func unknownTilesAreStripped() throws {
+        let profile = Profile(
+            name: "P",
+            apps: [.unknown(UnknownTile(tileType: "recents-tile")), .spacer(.normal)],
+            others: [.unknown(UnknownTile(tileType: "x-tile", label: "X"))]
+        )
+        let result = try sanitize(profile)
+        #expect(result.profile.apps == [.spacer(.normal)])
+        #expect(result.profile.others.isEmpty)
+        #expect(result.changes.contains(.droppedItem(.apps, index: 0, reason: .unknownTile)))
+        #expect(result.changes.contains(.droppedItem(.others, index: 0, reason: .unknownTile)))
+    }
+
+    @Test func itemCountIsCappedPerSection() throws {
+        let cap = Profile.maxImportItemsPerSection
+        let others = (0..<(cap + 5)).map { DockItem.file(FileItem(path: "/Users/me/f\($0).txt")) }
+        let result = try sanitize(Profile(name: "P", others: others))
+        #expect(result.profile.others.count == cap)
+        #expect(result.profile.others.last == others[cap - 1])
+        #expect(result.changes.contains(.droppedItemsOverLimit(.others, dropped: 5)))
+    }
+
+    @Test func invalidTilesDoNotUseUpTheCap() throws {
+        let cap = Profile.maxImportItemsPerSection
+        var others = (0..<10).map { _ in DockItem.unknown(UnknownTile(tileType: "x")) }
+        others += (0..<cap).map { DockItem.file(FileItem(path: "/Users/me/f\($0).txt")) }
+        let result = try sanitize(Profile(name: "P", others: others))
+        #expect(result.profile.others.count == cap)
+        #expect(!result.changes.contains { if case .droppedItemsOverLimit = $0 { true } else { false } })
+    }
+
+    @Test func oversizedLocationsDropTheTile() throws {
+        let longPath = "/Users/me/" + String(repeating: "a", count: Profile.maxImportLocationLength)
+        let longURL = "https://example.com/" + String(repeating: "a", count: Profile.maxImportLocationLength)
+        let result = try sanitize(Profile(name: "P", others: [
+            .folder(FolderItem(path: longPath)),
+            .file(FileItem(path: longPath)),
+            https(longURL),
+            .file(FileItem(path: "/Users/me/ok")),
+        ]))
+        #expect(result.profile.others == [.file(FileItem(path: "/Users/me/ok"))])
+        for index in 0..<3 {
+            #expect(result.changes.contains(.droppedItem(.others, index: index, reason: .stringTooLong)))
+        }
+    }
+
+    @Test func oversizedLocationAtTheLimitIsKept() throws {
+        let path = "/Users/me/" + String(repeating: "a", count: Profile.maxImportLocationLength - 10)
+        #expect(path.count == Profile.maxImportLocationLength)
+        let result = try sanitize(Profile(name: "P", others: [.file(FileItem(path: path))]))
+        #expect(result.profile.others.count == 1)
+    }
+
+    @Test func oversizedTextIsShortenedOrDropped() throws {
+        let long = String(repeating: "x", count: Profile.maxImportTextLength + 50)
+        let result = try sanitize(Profile(
+            name: String(repeating: "n", count: Profile.maxNameLength + 20),
+            apps: [
+                .app(AppRef(bundleId: "com.a", name: long)),
+                .app(AppRef(bundleId: long, name: "Big id")),
+            ],
+            others: [.file(FileItem(path: "/Users/me/a", label: long))]
+        ))
+        #expect(result.profile.name.count == Profile.maxNameLength)
+        #expect(result.profile.apps.count == 1)
+        guard case .app(let app) = result.profile.apps[0] else { Issue.record("not an app"); return }
+        #expect(app.name.count == Profile.maxImportTextLength)
+        guard case .file(let file) = result.profile.others[0] else { Issue.record("not a file"); return }
+        #expect(file.label?.count == Profile.maxImportTextLength)
+        #expect(result.changes.contains(.truncatedString(field: "name")))
+        #expect(result.changes.contains(.truncatedString(field: "app name")))
+        #expect(result.changes.contains(.truncatedString(field: "label")))
+        #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .stringTooLong)))
+    }
+
+    @Test func suspiciousCaskNamesAreCleared() throws {
+        let casks = ["firefox", "homebrew/cask-versions/firefox-beta", "-evil", "a b", "x;rm", "../x", "UPPER", ""]
+        let apps = casks.enumerated().map { DockItem.app(AppRef(bundleId: "com.a\($0.offset)", name: "A\($0.offset)", brewCask: $0.element)) }
+        let result = try sanitize(Profile(name: "P", apps: apps))
+        let kept: [String?] = result.profile.apps.map { item in
+            if case .app(let a) = item { return a.brewCask }
+            return nil
+        }
+        #expect(kept == ["firefox", "homebrew/cask-versions/firefox-beta", nil, nil, nil, nil, nil, nil])
+        #expect(result.changes.filter { if case .clearedBrewCask = $0 { true } else { false } }.count == 6)
+    }
+
+    @Test func duplicateLabelsAfterSanitizingAreDropped() throws {
+        // The first app's path is cleared, so both now label as "Same".
+        let result = try sanitize(Profile(name: "P", apps: [
+            .app(AppRef(bundleId: "com.a", name: "Same", path: "/Applications/Other.app")),
+            .app(AppRef(bundleId: "com.b", name: "Same")),
+        ]))
+        #expect(result.profile.apps.count == 1)
+        #expect(result.changes.contains(.droppedItem(.apps, index: 1, reason: .duplicateLabel)))
+    }
+
+    @Test func resultAlwaysValidatesWithoutUnknownTiles() throws {
+        let result = try sanitize(ModelTestSupport.sampleProfile())
+        try result.profile.validate()
+    }
+
+    @Test func emptyNameThrows() {
+        #expect(throws: ImportSanitizationError.invalidProfile(.emptyName)) {
+            try sanitize(Profile(name: "   "))
+        }
+    }
+
+    @Test func invalidPrefsThrow() {
+        let profile = Profile(name: "P", prefs: DockPrefs(tileSize: -1))
+        #expect(throws: ImportSanitizationError.self) { try sanitize(profile) }
+    }
+
+    @Test func inputIsNotMutatedAndIDIsFreshEachTime() throws {
+        let original = Profile(name: "P", switching: SwitchingOptions(quitScope: .allNotInProfile))
+        let a = try sanitize(original)
+        let b = try sanitize(original)
+        #expect(original.switching.quitScope == .allNotInProfile)
+        #expect(a.profile.id != b.profile.id)
+        #expect(a.profile.id != original.id)
+    }
+}
