@@ -1,0 +1,113 @@
+name: Bump cask
+
+on:
+  repository_dispatch:
+    types: [new-release]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release version (semver, e.g. 0.1.0)"
+        required: true
+        type: string
+
+permissions:
+  contents: write
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout tap
+        uses: actions/checkout@v4
+
+      - name: Resolve version
+        env:
+          DISPATCH_VERSION: ${{ github.event.client_payload.version }}
+          INPUT_VERSION: ${{ github.event.inputs.version }}
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "repository_dispatch" ]]; then
+            VERSION="${DISPATCH_VERSION:-}"
+          else
+            VERSION="${INPUT_VERSION:-}"
+          fi
+          if [[ ! "${VERSION}" =~ ^[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+            echo "Invalid version: must match ^[0-9]+\\.[0-9]+\\.[0-9]+$" >&2
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "${GITHUB_ENV}"
+
+      - name: Download release artifacts
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          base="https://github.com/Farzin-Firoozi/oh-my-dock/releases/download/v${VERSION}"
+          curl -fsSL -o "OhMyDock-${VERSION}.zip" "${base}/OhMyDock-${VERSION}.zip"
+          curl -fsSL -o "OhMyDock-${VERSION}.zip.sha256" "${base}/OhMyDock-${VERSION}.zip.sha256"
+
+      - name: Verify checksum
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          published="$(tr -d '[:space:]' < "OhMyDock-${VERSION}.zip.sha256")"
+          if [[ ! "${published}" =~ ^[0-9a-fA-F]{64}$ ]]; then
+            echo "Published sha256 file is not a 64-character hex digest" >&2
+            exit 1
+          fi
+          computed="$(sha256sum "OhMyDock-${VERSION}.zip" | awk '{ print $1 }')"
+          if [[ "${computed}" != "${published}" ]]; then
+            echo "Checksum mismatch: computed ${computed}, published ${published}" >&2
+            exit 1
+          fi
+          echo "SHA256=${published,,}" >> "${GITHUB_ENV}"
+
+      - name: Update cask
+        env:
+          VERSION: ${{ env.VERSION }}
+          SHA256: ${{ env.SHA256 }}
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          import os
+          import re
+          from pathlib import Path
+
+          version = os.environ["VERSION"]
+          sha256 = os.environ["SHA256"]
+          path = Path("Casks/oh-my-dock.rb")
+          text = path.read_text()
+          text, n_ver = re.subn(
+              r'^  version ".*"$',
+              f'  version "{version}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          text, n_sha = re.subn(
+              r'^  sha256 ".*"$',
+              f'  sha256 "{sha256}"',
+              text,
+              count=1,
+              flags=re.MULTILINE,
+          )
+          if n_ver != 1 or n_sha != 1:
+              raise SystemExit(f"expected one version and one sha256 line, got {n_ver} and {n_sha}")
+          path.write_text(text)
+          PY
+
+      - name: Commit and push
+        env:
+          VERSION: ${{ env.VERSION }}
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Casks/oh-my-dock.rb
+          if git diff --staged --quiet; then
+            echo "Cask already up to date for v${VERSION}"
+            exit 0
+          fi
+          git commit -m "chore(cask): bump oh-my-dock to ${VERSION}"
+          git push
