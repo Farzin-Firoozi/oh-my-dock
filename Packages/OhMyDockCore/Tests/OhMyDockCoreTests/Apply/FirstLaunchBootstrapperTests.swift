@@ -552,6 +552,49 @@ import Testing
         #expect(dropped == [.app(AppRef(bundleId: "com.example.e", name: "Pathed", path: "/Other/Solo.app"))])
     }
 
+    @Test func relabelledTilesAvoidEveryKeyAnotherTileUses() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        // The pathless "Mail" collides with Mail.app and would become "Mail (2)", which the file
+        // in the other section already has as its label.
+        let state = DockState(
+            apps: [
+                .app(AppRef(bundleId: "com.apple.mail", name: "Mail", path: "/System/Applications/Mail.app")),
+                .app(AppRef(bundleId: "com.example.mail", name: "Mail")),
+            ],
+            others: [
+                .file(FileItem(path: "/Users/me/mail.txt", label: "Mail (2)")),
+                .folder(FolderItem(path: "/Users/me/com.example.mail")),
+            ]
+        )
+        let bootstrapper = FirstLaunchBootstrapper(
+            reader: { state },
+            profileStore: ProfileStore(rootDirectory: tempDir.appendingPathComponent("profiles")),
+            snapshotStore: SnapshotStore(
+                rootDirectory: tempDir.appendingPathComponent("snapshots"),
+                domainIO: FakeDockDomainIO(domainData: try dockPlist())
+            ),
+            markerURL: tempDir.appendingPathComponent(".first-launch-complete")
+        )
+
+        let result = try await bootstrapper.runIfNeeded()
+
+        guard case .created(let profile, _, let dropped) = result else {
+            Issue.record("Expected .created but got \(result)")
+            return
+        }
+        #expect(dropped.isEmpty)
+        #expect(profile.apps.count == 2 && profile.others.count == 2)
+        // `DockutilPlanner.wouldReject` on a full rewrite (apps, then others): no tile's label may
+        // be a match key of a tile added before it.
+        var keys: Set<String> = []
+        for item in profile.apps + profile.others {
+            #expect(!keys.contains(DockutilPlanner.computedLabel(of: item)))
+            keys.formUnion(DockutilPlanner.matchKeys(of: item))
+        }
+    }
+
     // MARK: - Helpers
 
     private func makeTempDir() throws -> URL {

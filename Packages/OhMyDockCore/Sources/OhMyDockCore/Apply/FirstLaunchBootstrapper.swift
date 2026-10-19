@@ -151,12 +151,15 @@ public struct FirstLaunchBootstrapper: Sendable {
         from dockState: DockState
     ) throws -> (Profile, [DockItem]) {
         var dropped: [DockItem] = []
+        var names = LabelNames(
+            reserved: (dockState.apps + dockState.others).reduce(into: []) { $0.formUnion(DockutilPlanner.matchKeys(of: $1)) }
+        )
         func capturable(_ items: [DockItem]) -> [DockItem] {
             let known = items.filter {
                 if case .unknown = $0 { dropped.append($0); return false }
                 return true
             }
-            return disambiguatingLabels(known, dropping: &dropped)
+            return disambiguatingLabels(known, names: &names, dropping: &dropped)
         }
         let profile = Profile(
             name: name,
@@ -167,41 +170,60 @@ public struct FirstLaunchBootstrapper: Sendable {
         return (profile, dropped)
     }
 
-    /// Gives folders, files and URLs whose computed label an earlier tile already has an explicit
-    /// "Label (2)", "(3)", ... that is free in the section. A pathless app is renamed likewise (its
-    /// name is its label). An app whose label comes from its path cannot be relabelled and goes
-    /// into `dropped`.
-    private static func disambiguatingLabels(_ items: [DockItem], dropping dropped: inout [DockItem]) -> [DockItem] {
-        var used = Set(items.filter { !$0.isSpacer }.map(DockutilPlanner.computedLabel(of:)))
-        var seen: Set<String> = []
-        var result: [DockItem] = []
-        func freeLabel(_ base: String) -> String {
+    /// What `disambiguatingLabels` knows across both sections, since dockutil searches the whole
+    /// Dock for a label.
+    private struct LabelNames {
+        /// Every match key of every tile in the Dock, and every label handed out so far: a new
+        /// label must avoid all of them.
+        var reserved: Set<String>
+        /// Match keys of the tiles kept so far.
+        var taken: Set<String> = []
+
+        mutating func freeLabel(_ base: String) -> String {
             var n = 2
-            while used.contains("\(base) (\(n))") { n += 1 }
+            while reserved.contains("\(base) (\(n))") { n += 1 }
             let label = "\(base) (\(n))"
-            used.insert(label)
+            reserved.insert(label)
             return label
         }
+    }
+
+    /// Gives folders, files and URLs whose label is a match key of an earlier tile (per
+    /// `DockutilPlanner.wouldReject`: dockutil would refuse to add them) an explicit "Label (2)",
+    /// "(3)", ... that no tile uses as label, name, bundle id, path or URL. A pathless app is
+    /// renamed likewise (its name is its label). An app whose label comes from its path cannot be
+    /// relabelled and goes into `dropped`.
+    private static func disambiguatingLabels(
+        _ items: [DockItem],
+        names: inout LabelNames,
+        dropping dropped: inout [DockItem]
+    ) -> [DockItem] {
+        var result: [DockItem] = []
         for item in items {
             if item.isSpacer { result.append(item); continue }
             let label = DockutilPlanner.computedLabel(of: item)
-            if label.isEmpty || seen.insert(label).inserted { result.append(item); continue }
-            switch item {
-            case .folder(var folder):
-                folder.label = freeLabel(label)
-                result.append(.folder(folder))
-            case .file(var file):
-                file.label = freeLabel(label)
-                result.append(.file(file))
-            case .url(var url):
-                url.label = freeLabel(label)
-                result.append(.url(url))
-            case .app(var app) where (app.path ?? "").isEmpty:
-                app.name = freeLabel(label)
-                result.append(.app(app))
-            default:
-                dropped.append(item)
+            var kept = item
+            if !label.isEmpty, names.taken.contains(label) {
+                switch item {
+                case .folder(var folder):
+                    folder.label = names.freeLabel(label)
+                    kept = .folder(folder)
+                case .file(var file):
+                    file.label = names.freeLabel(label)
+                    kept = .file(file)
+                case .url(var url):
+                    url.label = names.freeLabel(label)
+                    kept = .url(url)
+                case .app(var app) where (app.path ?? "").isEmpty:
+                    app.name = names.freeLabel(label)
+                    kept = .app(app)
+                default:
+                    dropped.append(item)
+                    continue
+                }
             }
+            names.taken.formUnion(DockutilPlanner.matchKeys(of: kept))
+            result.append(kept)
         }
         return result
     }
