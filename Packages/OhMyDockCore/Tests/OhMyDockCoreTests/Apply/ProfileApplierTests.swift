@@ -740,6 +740,34 @@ struct ProfileApplierTests {
         #expect(await env.backend.state == DockState(others: [Sample.example]))
     }
 
+    // MARK: Path resolution
+
+    @Test func pathHintIsUsedOnlyForTheAppItBelongsTo() throws {
+        let root = try makeTempDirectory("omd-resolve")
+        defer { try? FileManager.default.removeItem(at: root) }
+        let bundle = root.appendingPathComponent("Fig.app")
+        try FileManager.default.createDirectory(at: bundle, withIntermediateDirectories: true)
+        let path = bundle.path(percentEncoded: false)
+
+        func resolve(_ app: AppRef, installed: @escaping (String) -> URL? = { _ in nil }, id: String?) -> String? {
+            ProfileApplier.resolvePath(app, installedURL: installed, bundleIdentifier: { _ in id })
+        }
+
+        let app = AppRef(bundleId: "com.example.fig", name: "Fig", path: path)
+        #expect(resolve(app, id: "com.example.fig") == path)
+        // Something else lives at the old path.
+        #expect(resolve(app, id: "com.example.other") == nil)
+        #expect(resolve(app, id: nil) == nil)
+        // No bundle identifier to check against: the existing path is all there is.
+        #expect(resolve(AppRef(bundleId: "", name: "Fig", path: path), id: "com.example.other") == path)
+        // A missing path is no path.
+        #expect(resolve(AppRef(bundleId: "com.example.fig", name: "Fig", path: path + "x"), id: "com.example.fig") == nil)
+        #expect(resolve(AppRef(bundleId: "com.example.fig", name: "Fig"), id: "com.example.fig") == nil)
+        // The installed app wins over the hint.
+        let installed = URL(fileURLWithPath: "/Applications/Fig.app")
+        #expect(resolve(app, installed: { _ in installed }, id: "com.example.other") == "/Applications/Fig.app")
+    }
+
     // MARK: Rollback
 
     @Test func backendFailureRollsBackAndRestartsOnce() async throws {

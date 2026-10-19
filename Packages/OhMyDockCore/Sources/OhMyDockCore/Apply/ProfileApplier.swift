@@ -165,17 +165,35 @@ public actor ProfileApplier {
     public typealias AppPathResolver = @Sendable (AppRef) -> String?
     typealias Planner = @Sendable (DockState, DockState) -> DockPlan
 
-    /// The installed app for the bundle identifier, else `AppRef.path` when it exists on disk.
+    /// The installed app for the bundle identifier, else `AppRef.path` when it exists on disk and
+    /// is that app (see `resolvePath(_:installedURL:bundleIdentifier:)`).
     public static let defaultPathResolver: AppPathResolver = { app in
-        if !app.bundleId.isEmpty,
-           let url = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleId)
-        {
+        resolvePath(
+            app,
+            installedURL: { NSWorkspace.shared.urlForApplication(withBundleIdentifier: $0) },
+            bundleIdentifier: DockPlistParser.bundleIdentifier(at:)
+        )
+    }
+
+    /// The path hint is only a fallback for an app the system does not know by bundle identifier.
+    /// It must exist, and when the profile names a bundle identifier, the bundle at the path must
+    /// carry that identifier: a different app (or a stale file) sitting at the old path must not
+    /// stand in for the one the profile asks for.
+    static func resolvePath(
+        _ app: AppRef,
+        installedURL: (String) -> URL?,
+        bundleIdentifier: (URL) -> String?
+    ) -> String? {
+        if !app.bundleId.isEmpty, let url = installedURL(app.bundleId) {
             return url.path(percentEncoded: false)
         }
-        if let path = app.path, !path.isEmpty, FileManager.default.fileExists(atPath: path) {
-            return path
+        guard let path = app.path, !path.isEmpty, FileManager.default.fileExists(atPath: path) else {
+            return nil
         }
-        return nil
+        if !app.bundleId.isEmpty, bundleIdentifier(URL(fileURLWithPath: path)) != app.bundleId {
+            return nil
+        }
+        return path
     }
 
     private struct InFlight {
