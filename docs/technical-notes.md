@@ -56,6 +56,8 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 - **Quit with a preview.** `AppDelegate.applicationShouldTerminate` returns `.terminateLater` when a preview is active and asks `PreviewQuitCoordinator.revertForQuit()` to revert it through the gate, waiting at most 10 s. If the revert fails or times out, an alert offers “Quit Anyway” (restore “Before previewing Dock preferences” from History) or Cancel.
 
+- **AppKit on the main thread.** `ProfileApplier` is an actor, so `AppSwitcher` runs off the main thread. `LiveRunningApps` runs every `NSRunningApplication` / `NSWorkspace` call (process list, `isTerminated`, `isFinishedLaunching`, `activationPolicy`, `terminate()`, `forceTerminate()`) through `MainThread.run` (inline on main, `DispatchQueue.main.sync` otherwise), and `LiveAppLauncher` opens apps from a `@MainActor` function. The provider protocols stay synchronous, so fakes and `AppSwitcher.plan` are unchanged.
+
 ### DockPrefsWriter (M2)
 
 - **`DockPrefsDomainIO`**: read/write/remove a single key + `synchronize()`. Live: `CFPreferencesDockPrefsDomainIO` (`com.apple.dock`). Tests: `InMemoryDockPrefsDomainIO` only; any live CFPreferences test uses a throwaway domain, never `com.apple.dock`.
