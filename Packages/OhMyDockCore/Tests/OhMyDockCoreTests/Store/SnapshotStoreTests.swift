@@ -231,6 +231,54 @@ import Testing
         #expect(try plistDictionary(await io.domainData) == plistDictionary(current))
     }
 
+    @Test func restoreReportsBothErrorsWhenTheRecoveryImportFails() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let current = try dockPlist(label: "Current", additionalValues: ["extra-a": 1])
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(current)
+        await io.failImports(onCalls: [1, 2])
+
+        let error = await #expect(throws: SnapshotStoreError.self) {
+            try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+        }
+        guard case let .restoreAndRecoveryFailed(id, restore, recovery)? = error else {
+            Issue.record("Expected restoreAndRecoveryFailed, got \(String(describing: error))")
+            return
+        }
+        #expect(id == targetSnapshot.id)
+        #expect(restore.error is FakeDockDomainIO.Injected)
+        #expect(recovery.error is FakeDockDomainIO.Injected)
+    }
+
+    @Test func restoreReportsRecoveryThatDoesNotReadBackAsThePreviousDomain() async throws {
+        let root = try makeTempRoot()
+        defer { cleanup(root) }
+
+        let target = try dockPlist(label: "Target")
+        let current = try dockPlist(label: "Current", additionalValues: ["extra-a": 1])
+        let io = FakeDockDomainIO(domainData: target)
+        let store = SnapshotStore(rootDirectory: root, domainIO: io)
+        let targetSnapshot = try await store.save(reason: "Target")
+        await io.setDomainData(current)
+        // Both imports (restore, then recovery) are rewritten by something else.
+        await io.setDomainDataAfterImport(try dockPlist(label: "Rewritten by macOS"), forImports: [1, 2])
+
+        let error = await #expect(throws: SnapshotStoreError.self) {
+            try await store.restore(id: targetSnapshot.id, createSafetySnapshot: false)
+        }
+        guard case let .restoreAndRecoveryFailed(_, restore, recovery)? = error else {
+            Issue.record("Expected restoreAndRecoveryFailed, got \(String(describing: error))")
+            return
+        }
+        #expect(restore.error as? SnapshotStoreError == .restoreVerificationFailed(targetSnapshot.id))
+        #expect(recovery.error as? SnapshotStoreError == .restoreVerificationFailed(targetSnapshot.id))
+    }
+
     @Test func restoreToleratesDockRewritingVolatileKeys() async throws {
         let root = try makeTempRoot()
         defer { cleanup(root) }
@@ -583,6 +631,9 @@ private actor FakeDockDomainIO: DockDomainIO {
     private(set) var exportCount = 0
     private(set) var deletedKeys: [String] = []
     private var domainDataAfterImport: Data?
+    private var rewrittenAfterImports: (data: Data, calls: Set<Int>)?
+    private var failingImports: Set<Int> = []
+    private var importCalls = 0
     private var failDeleteCall: Int?
     private var deleteCalls = 0
     private var shouldFailNextImport = false
@@ -591,6 +642,12 @@ private actor FakeDockDomainIO: DockDomainIO {
 
     func failDelete(onCall call: Int) { failDeleteCall = call }
     func failNextImport() { shouldFailNextImport = true }
+    /// Fails the imports whose 1-based numbers are in `calls`.
+    func failImports(onCalls calls: Set<Int>) { failingImports = calls }
+    /// Replaces the domain after the imports whose 1-based numbers are in `imports`.
+    func setDomainDataAfterImport(_ data: Data, forImports imports: Set<Int>) {
+        rewrittenAfterImports = (data, imports)
+    }
 
     init(domainData: Data) {
         self.domainData = domainData
@@ -610,6 +667,8 @@ private actor FakeDockDomainIO: DockDomainIO {
     }
 
     func importDomain(from url: URL) async throws {
+        importCalls += 1
+        if failingImports.contains(importCalls) { throw Injected() }
         if shouldFailNextImport {
             shouldFailNextImport = false
             throw Injected()
@@ -626,6 +685,9 @@ private actor FakeDockDomainIO: DockDomainIO {
         if let domainDataAfterImport {
             domainData = domainDataAfterImport
             self.domainDataAfterImport = nil
+        }
+        if let rewritten = rewrittenAfterImports, rewritten.calls.contains(importCalls) {
+            domainData = rewritten.data
         }
     }
 

@@ -911,7 +911,13 @@ struct ProfileApplierTests {
             return
         }
         #expect(original as? DockBackendError == .commandFailed("boom"))
-        #expect(rollback as? ImportFailure == ImportFailure())
+        // Both the restore and the recovery import failed.
+        guard case let .restoreAndRecoveryFailed(_, restore, recovery)? = rollback as? SnapshotStoreError else {
+            Issue.record("Expected restoreAndRecoveryFailed, got \(rollback)")
+            return
+        }
+        #expect(restore.error as? ImportFailure == ImportFailure())
+        #expect(recovery.error as? ImportFailure == ImportFailure())
         #expect(await env.snapshots.map(\.id) == [snapshotID])
         #expect(await env.restarter.count == 0)
     }

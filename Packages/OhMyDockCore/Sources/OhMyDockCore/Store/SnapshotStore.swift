@@ -179,6 +179,25 @@ public enum SnapshotStoreError: Error, Equatable, Sendable {
     case checksumMismatch(id: UUID, expected: String, actual: String)
     case restoreVerificationFailed(UUID)
     case invalidKeepCount(Int)
+    /// The restore failed, and so did putting the previous domain back (the import failed, or the
+    /// read-back after it did not match). The Dock preferences may be half-written; `restore` is
+    /// the error that started it, `recovery` the one that stopped the way back.
+    case restoreAndRecoveryFailed(id: UUID, restore: UnderlyingError, recovery: UnderlyingError)
+}
+
+/// An error carried inside an `Equatable` error. Two are equal when they print the same.
+public struct UnderlyingError: Error, Equatable, Sendable, CustomStringConvertible {
+    public let error: any Error
+
+    public init(_ error: any Error) {
+        self.error = error
+    }
+
+    public var description: String { String(describing: error) }
+
+    public static func == (lhs: UnderlyingError, rhs: UnderlyingError) -> Bool {
+        String(reflecting: lhs.error) == String(reflecting: rhs.error)
+    }
 }
 
 public actor SnapshotStore {
@@ -406,13 +425,20 @@ public actor SnapshotStore {
                 via: verificationURL
             )
         } catch {
-            await rollBackDomain(
+            if let recoveryError = await rollBackDomain(
                 to: currentData,
                 currentKeys: Set(currentDictionary.keys),
                 attemptedKeys: Set(targetDictionary.keys),
                 via: rollbackURL,
-                scratchURL: verificationURL
-            )
+                scratchURL: verificationURL,
+                id: id
+            ) {
+                throw SnapshotStoreError.restoreAndRecoveryFailed(
+                    id: id,
+                    restore: UnderlyingError(error),
+                    recovery: UnderlyingError(recoveryError)
+                )
+            }
             throw error
         }
     }
@@ -457,15 +483,18 @@ public actor SnapshotStore {
         throw SnapshotStoreError.restoreVerificationFailed(id)
     }
 
-    /// Best effort: re-applies the pre-restore domain with replace semantics. Errors are
-    /// swallowed so the original failure is the one reported.
+    /// Re-applies the pre-restore domain with replace semantics, then reads it back and checks it
+    /// equals the pre-image. Returns nil when the previous domain is back, else why it is not:
+    /// the caller reports that together with the restore error. Failed deletes are ignored, since
+    /// importing the pre-image is the part that matters and the read-back catches what is left.
     private func rollBackDomain(
         to preImage: Data,
         currentKeys: Set<String>,
         attemptedKeys: Set<String>,
         via url: URL,
-        scratchURL: URL
-    ) async {
+        scratchURL: URL,
+        id: UUID
+    ) async -> (any Error)? {
         // Keys the failed restore may have added: anything in the target or now in the domain
         // that the pre-image does not have.
         var extra = attemptedKeys
@@ -484,7 +513,16 @@ public actor SnapshotStore {
             try preImage.write(to: url, options: [])
             try fileManager.setAttributes([.posixPermissions: 0o600], ofItemAtPath: url.path)
             try await domainIO.importDomain(from: url)
-        } catch {}
+            try await verifyRestored(
+                target: try plistDictionary(preImage),
+                deletedKeys: keys,
+                id: id,
+                via: scratchURL
+            )
+            return nil
+        } catch {
+            return error
+        }
     }
 
     public func delete(id: UUID) throws {
