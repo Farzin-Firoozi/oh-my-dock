@@ -137,14 +137,14 @@ private actor RecordingApplier: ProfileApplying {
         let registrar = FakeHotkeyRegistrar()
         let service = HotkeyService(registrar: registrar)
         let applier = RecordingApplier()
+        let profile = Profile(name: "Work", hotkey: Hotkey(keyCode: 18, modifiers: [.command]))
         let model = MenuBarViewModel(
-            library: FakeSettingsLibrary([]),
+            library: FakeSettingsLibrary([profile]),
             dock: FakeDockBackend(state: .init()),
             applier: applier,
             undoer: EmptyUndoer()
         )
         service.attach(menuBar: model)
-        let profile = Profile(name: "Work", hotkey: Hotkey(keyCode: 18, modifiers: [.command]))
         service.sync(profiles: [profile])
 
         registrar.handlers[profile.id]?()
@@ -154,6 +154,29 @@ private actor RecordingApplier: ProfileApplying {
         }
 
         #expect(await applier.applied.map(\.id) == [profile.id])
+    }
+
+    @Test func hotkeyAppliesTheLatestStoredProfileNotTheRegisteredCopy() async throws {
+        let registrar = FakeHotkeyRegistrar()
+        let service = HotkeyService(registrar: registrar)
+        let applier = RecordingApplier()
+        let registered = Profile(name: "Work", hotkey: Hotkey(keyCode: 18, modifiers: [.command]))
+        let library = FakeSettingsLibrary([registered])
+        let model = MenuBarViewModel(
+            library: library, dock: FakeDockBackend(state: .init()), applier: applier, undoer: EmptyUndoer()
+        )
+        service.attach(menuBar: model)
+        service.sync(profiles: [registered])
+
+        // The editor renames the profile after the hotkey was registered.
+        await library.rename(registered.id, to: "Work v2")
+        registrar.handlers[registered.id]?()
+        for _ in 0..<100 {
+            if await applier.applied.count == 1 { break }
+            try? await Task.sleep(for: .milliseconds(5))
+        }
+
+        #expect(await applier.applied.map(\.name) == ["Work v2"])
     }
 
     @Test func duplicateHotkeysRegisterFirstProfileOnly() {

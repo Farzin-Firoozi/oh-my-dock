@@ -6,7 +6,6 @@ import OhMyDockCore
 final class HotkeyService {
     private let registrar: any HotkeyRegistering
     private weak var menuBar: MenuBarViewModel?
-    private var profilesByID: [UUID: Profile] = [:]
 
     init(registrar: any HotkeyRegistering) {
         self.registrar = registrar
@@ -17,12 +16,11 @@ final class HotkeyService {
     }
 
     func sync(profiles: [Profile]) {
-        profilesByID = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
         let registrations = profiles.map { profile in
             let profileID = profile.id
             return ProfileHotkeyRegistration(profileID: profileID, hotkey: profile.hotkey) { [weak self] in
-                guard let self, let profile = self.profilesByID[profileID] else { return }
-                self.menuBar?.apply(profile)
+                // The model applies the latest stored profile, not the copy registered here.
+                self?.menuBar?.applyFromHotkey(profileID: profileID)
             }
         }
         registrar.applyRegistrations(registrations)
@@ -30,6 +28,5 @@ final class HotkeyService {
 
     func stop() {
         registrar.removeAll()
-        profilesByID = [:]
     }
 }

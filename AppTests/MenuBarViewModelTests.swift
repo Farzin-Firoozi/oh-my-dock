@@ -102,6 +102,22 @@ private actor SlowFirstLibrary: ProfileLibrary {
     }
 }
 
+@MainActor
+private final class FakePresenter: ConfirmationPresenting {
+    private(set) var presented: [MenuBarViewModel.Confirmation] = []
+    private(set) var dismissCount = 0
+    private var answer: (@MainActor (Bool) -> Void)?
+
+    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void) {
+        presented.append(confirmation)
+        self.answer = answer
+    }
+
+    func dismiss() { dismissCount += 1 }
+
+    func userAnswers(_ accepted: Bool) { answer?(accepted) }
+}
+
 // MARK: - Helpers
 
 private func app(_ id: String, _ name: String) -> DockItem {
@@ -408,6 +424,93 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
         #expect(model.confirmation == nil)
         #expect(model.banner?.message.hasPrefix("Applied “Work”") == true)
+    }
+
+    private static let askingApplier = FakeApplier { _, confirm in
+        let accepted = await confirm?(preview("Work", skipped: [Self.missing])) ?? false
+        return accepted ? .applied(report()) : .cancelled(rolledBack: false)
+    }
+
+    @Test func aHotkeyApplyThatNeedsConfirmationIsPresentedOutsideThePopover() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let model = MenuBarViewModel(
+            library: FakeLibrary([work]), dock: FakeDockBackend(), applier: Self.askingApplier,
+            undoer: FakeUndoer(), confirmationPresenter: presenter
+        )
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.confirmation != nil })
+        #expect(presenter.presented.map(\.profileName) == ["Work"])
+
+        presenter.userAnswers(true)
+        #expect(await eventually { model.activity == nil })
+        #expect(model.confirmation == nil)
+        #expect(model.banner?.message.hasPrefix("Applied “Work”") == true)
+    }
+
+    @Test func aPopoverApplyDoesNotOpenAnAlert() async {
+        let presenter = FakePresenter()
+        let model = MenuBarViewModel(
+            library: FakeLibrary(), dock: FakeDockBackend(), applier: Self.askingApplier,
+            undoer: FakeUndoer(), confirmationPresenter: presenter
+        )
+
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmation != nil })
+        #expect(presenter.presented.isEmpty)
+
+        model.resolveConfirmation(false)
+        #expect(await eventually { model.activity == nil })
+        // Answering on the card also takes down any alert.
+        #expect(presenter.dismissCount == 1)
+    }
+
+    @Test func anUnansweredConfirmationTimesOutAndReleasesBusy() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let model = MenuBarViewModel(
+            library: FakeLibrary([work]), dock: FakeDockBackend(), applier: Self.askingApplier,
+            undoer: FakeUndoer(), confirmationPresenter: presenter, confirmationTimeout: .milliseconds(30)
+        )
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.confirmation != nil })
+        #expect(await eventually { model.activity == nil })
+
+        #expect(model.isBusy == false)
+        #expect(model.confirmation == nil)
+        #expect(model.banner?.kind == .failure)
+        #expect(model.banner?.message.hasPrefix("Timed out waiting for confirmation") == true)
+        #expect(presenter.dismissCount == 1)
+    }
+
+    @Test func aLateAnswerFromAnOldAlertCannotResolveANewerQuestion() async {
+        let model = makeModel(applier: Self.askingApplier)
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmation != nil })
+
+        model.resolveConfirmation(true, token: -1)
+        #expect(model.confirmation != nil)
+
+        model.resolveConfirmation(false)
+        #expect(await eventually { model.activity == nil })
+    }
+
+    @Test func cancellingTheDiffSheetReturnsToTheConfirmationCardWithoutDeclining() async {
+        let model = makeModel(applier: Self.askingApplier)
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmation != nil })
+
+        model.showsDiffSheet = true
+        model.cancelDiffSheet()
+
+        #expect(model.showsDiffSheet == false)
+        #expect(model.confirmation != nil)
+        #expect(model.isBusy)
+
+        model.resolveConfirmation(false)
+        #expect(await eventually { model.activity == nil })
     }
 
     @Test func decliningTheConfirmationLeavesTheDockAlone() async {

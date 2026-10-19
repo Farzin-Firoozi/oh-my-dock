@@ -40,6 +40,13 @@ final class MenuBarViewModel {
         }
     }
 
+    /// Where an apply was started from. A hotkey apply may run while the popover is closed, so a
+    /// question it raises is also put in front of the user by the `ConfirmationPresenting` hook.
+    enum ApplySource: Equatable {
+        case popover
+        case hotkey
+    }
+
     enum Activity: Equatable {
         case applying(profileName: String)
         case undoing
@@ -71,6 +78,8 @@ final class MenuBarViewModel {
     @ObservationIgnored private let undoer: any DockUndoing
     @ObservationIgnored private let bootstrap: (@Sendable () async throws -> Void)?
     @ObservationIgnored private let gate: DockOperationGate
+    @ObservationIgnored private let confirmationPresenter: (any ConfirmationPresenting)?
+    @ObservationIgnored private let confirmationTimeout: Duration
 
     @ObservationIgnored private let activeRecord: any ActiveProfileRecording
     @ObservationIgnored private var lastAppliedID: UUID? {
@@ -79,6 +88,11 @@ final class MenuBarViewModel {
     @ObservationIgnored private var refreshGeneration = 0
     @ObservationIgnored private var operation: Task<Void, Never>?
     @ObservationIgnored private var pendingConfirmation: CheckedContinuation<Bool, Never>?
+    /// Identifies the open question, so a late answer from an old alert or timeout can't resolve a newer one.
+    @ObservationIgnored private var confirmationToken = 0
+    @ObservationIgnored private var confirmationTimeoutTask: Task<Void, Never>?
+    @ObservationIgnored private var confirmationTimedOut = false
+    @ObservationIgnored private var applySource = ApplySource.popover
 
     init(
         library: any ProfileLibrary,
@@ -87,9 +101,13 @@ final class MenuBarViewModel {
         undoer: any DockUndoing,
         bootstrap: (@Sendable () async throws -> Void)? = nil,
         gate: DockOperationGate = DockOperationGate(),
-        activeRecord: any ActiveProfileRecording = InMemoryActiveProfileRecord()
+        activeRecord: any ActiveProfileRecording = InMemoryActiveProfileRecord(),
+        confirmationPresenter: (any ConfirmationPresenting)? = nil,
+        confirmationTimeout: Duration = .seconds(120)
     ) {
         self.gate = gate
+        self.confirmationPresenter = confirmationPresenter
+        self.confirmationTimeout = confirmationTimeout
         self.activeRecord = activeRecord
         lastAppliedID = activeRecord.load()
         self.library = library
@@ -158,10 +176,31 @@ final class MenuBarViewModel {
         operation = Task { await performApply(profile) }
     }
 
-    func performApply(_ profile: Profile) async {
-        guard !isBusy else { return }
+    /// The hotkey entry point. Applies the latest stored version of the profile, not the copy the
+    /// hotkey was registered with, and says so when it can't run.
+    func applyFromHotkey(profileID: UUID) {
+        guard !isBusy else {
+            show(.failure, "Another Dock change is already running. Try again when it finishes.")
+            return
+        }
+        operation = Task {
+            guard let latest = await library.profiles().first(where: { $0.id == profileID }) else {
+                show(.failure, "That profile no longer exists.")
+                return
+            }
+            await performApply(latest, source: .hotkey)
+        }
+    }
+
+    func performApply(_ profile: Profile, source: ApplySource = .popover) async {
+        guard !isBusy else {
+            if source == .hotkey { show(.failure, "Another Dock change is already running. Try again when it finishes.") }
+            return
+        }
         activity = .applying(profileName: profile.name)
         banner = nil
+        applySource = source
+        confirmationTimedOut = false
         defer { activity = nil }
 
         do {
@@ -179,9 +218,10 @@ final class MenuBarViewModel {
                 lastAppliedID = profile.id
                 show(.success, "“\(profile.name)” is already on the Dock.")
             case let .cancelled(rolledBack):
-                show(.success, rolledBack
-                    ? "Cancelled. The previous Dock was restored."
-                    : "Cancelled. The Dock was not changed.")
+                let reason = confirmationTimedOut ? "Timed out waiting for confirmation" : "Cancelled"
+                show(confirmationTimedOut ? .failure : .success, rolledBack
+                    ? "\(reason). The previous Dock was restored."
+                    : "\(reason). The Dock was not changed.")
             }
         } catch {
             show(.failure, describe(error))
@@ -202,25 +242,56 @@ final class MenuBarViewModel {
         resolveConfirmation(false) // at most one question at a time
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
+                confirmationToken += 1
+                let token = confirmationToken
                 pendingConfirmation = continuation
-                confirmation = Confirmation(
+                let question = Confirmation(
                     profileName: preview.profileName,
                     skippedApps: preview.skipped.map { $0.app.name.isEmpty ? $0.app.bundleId : $0.app.name },
                     clearsRecentApps: preview.clearsRecentApps,
                     preview: preview
                 )
+                confirmation = question
+                // Nobody may be looking at the popover (a hotkey apply with the menu closed), so
+                // hand the question to the presenter too, and never wait forever.
+                if applySource == .hotkey {
+                    confirmationPresenter?.present(question) { [weak self] accepted in
+                        self?.resolveConfirmation(accepted, token: token)
+                    }
+                }
+                confirmationTimeoutTask = Task { [weak self, confirmationTimeout] in
+                    try? await Task.sleep(for: confirmationTimeout)
+                    guard !Task.isCancelled else { return }
+                    self?.expireConfirmation(token: token)
+                }
             }
         } onCancel: {
             Task { @MainActor [weak self] in self?.resolveConfirmation(false) }
         }
     }
 
-    func resolveConfirmation(_ accepted: Bool) {
+    /// Answers the open question. With a `token`, only if that question is still the open one.
+    func resolveConfirmation(_ accepted: Bool, token: Int? = nil) {
+        if let token, token != confirmationToken { return }
         showsDiffSheet = false
+        confirmationTimeoutTask?.cancel()
+        confirmationTimeoutTask = nil
         let continuation = pendingConfirmation
         pendingConfirmation = nil
         confirmation = nil
+        if continuation != nil { confirmationPresenter?.dismiss() }
         continuation?.resume(returning: accepted)
+    }
+
+    private func expireConfirmation(token: Int) {
+        guard token == confirmationToken, pendingConfirmation != nil else { return }
+        confirmationTimedOut = true
+        resolveConfirmation(false, token: token)
+    }
+
+    /// Closes the diff sheet and returns to the confirmation card; the question stays open.
+    func cancelDiffSheet() {
+        showsDiffSheet = false
     }
 
     /// Stops the running apply, declining any open question. The applier restores the Dock if it

@@ -27,6 +27,16 @@ protocol ProfileApplying: Sendable {
 
 extension ProfileApplier: ProfileApplying {}
 
+/// Puts a pending confirmation in front of the user outside the popover (an alert), for applies
+/// started by a hotkey while the menu is closed.
+@MainActor
+protocol ConfirmationPresenting: AnyObject {
+    /// Shows `confirmation`; calls `answer` when the user picks. Calls after `dismiss()` are ignored.
+    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void)
+    /// Takes the alert down because the question was answered elsewhere or timed out.
+    func dismiss()
+}
+
 /// The snapshot an undo would go back to.
 struct UndoTarget: Hashable, Sendable {
     let id: UUID

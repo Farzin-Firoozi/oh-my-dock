@@ -7,6 +7,9 @@ struct MenuBarContentView: View {
     @Bindable var model: MenuBarViewModel
     @Environment(\.openWindow) private var openWindow
     @FocusState private var nameFieldFocused: Bool
+    /// What the diff sheet shows. Copied when the sheet opens and kept until it has closed, so the
+    /// content doesn't vanish mid-dismissal when applying clears the model's confirmation.
+    @State private var sheetPreview: ApplyPreview?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -15,7 +18,10 @@ struct MenuBarContentView: View {
             if let confirmation = model.confirmation {
                 ConfirmationCard(
                     confirmation: confirmation,
-                    onReviewDiff: { model.showsDiffSheet = true }
+                    onReviewDiff: {
+                        sheetPreview = confirmation.preview
+                        model.showsDiffSheet = true
+                    }
                 ) { model.resolveConfirmation($0) }
             } else if let activity = model.activity {
                 ActivityCard(activity: activity, canCancel: model.confirmation == nil) {
@@ -42,12 +48,13 @@ struct MenuBarContentView: View {
         }
         .padding(14)
         .frame(width: 320)
-        .sheet(isPresented: $model.showsDiffSheet) {
-            if let preview = model.confirmation?.preview {
+        .sheet(isPresented: $model.showsDiffSheet, onDismiss: { sheetPreview = nil }) {
+            if let preview = sheetPreview {
                 DiffSheetView(
                     preview: preview,
                     onApply: { model.resolveConfirmation(true) },
-                    onCancel: { model.resolveConfirmation(false) }
+                    // Back to the confirmation card; declining happens only on the card's Cancel.
+                    onCancel: { model.cancelDiffSheet() }
                 )
             }
         }

@@ -33,7 +33,8 @@ enum AppEnvironment {
             undoer: SnapshotUndoService(snapshots: snapshots, restarter: restarter),
             bootstrap: { _ = try await bootstrapper.runIfNeeded() },
             gate: gate,
-            activeRecord: FileActiveProfileRecord()
+            activeRecord: FileActiveProfileRecord(),
+            confirmationPresenter: AlertConfirmationPresenter()
         )
         hotkeys.attach(menuBar: menuBar)
         let settings = SettingsViewModel(
