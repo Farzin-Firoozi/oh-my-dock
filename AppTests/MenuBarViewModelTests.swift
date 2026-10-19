@@ -110,9 +110,13 @@ private func makeModel(
     dock: FakeDockBackend = FakeDockBackend(),
     applier: FakeApplier = noApply,
     undoer: FakeUndoer = FakeUndoer(),
-    bootstrap: (@Sendable () async throws -> Void)? = nil
+    bootstrap: (@Sendable () async throws -> Void)? = nil,
+    activeRecord: any ActiveProfileRecording = InMemoryActiveProfileRecord()
 ) -> MenuBarViewModel {
-    MenuBarViewModel(library: library, dock: dock, applier: applier, undoer: undoer, bootstrap: bootstrap)
+    MenuBarViewModel(
+        library: library, dock: dock, applier: applier, undoer: undoer,
+        bootstrap: bootstrap, activeRecord: activeRecord
+    )
 }
 
 /// Waits (bounded) for `condition` to hold on the main actor.
@@ -152,6 +156,87 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         )
         await model.refresh()
         #expect(model.activeProfileID == nil)
+    }
+
+    private func link(_ label: String?) -> DockItem {
+        .url(URLItem(url: URL(string: "https://example.com")!, label: label))
+    }
+
+    @Test func persistedActiveProfileWinsAfterRelaunchWhenTheDockStillMatches() async {
+        // Both describe the same Dock; plain sorts first and would win a fuzzy match.
+        let plain = profile("A plain", apps: [])
+        var plainProfile = plain
+        plainProfile.others = [link(nil)]
+        var labelled = profile("B labelled")
+        labelled.others = [link("Example")]
+        let dock = FakeDockBackend(state: DockState(others: [link("Example")]))
+        let record = InMemoryActiveProfileRecord(plainProfile.id)
+        let model = makeModel(library: FakeLibrary([plainProfile, labelled]), dock: dock, activeRecord: record)
+
+        await model.refresh()
+
+        #expect(model.activeProfileID == plainProfile.id)
+    }
+
+    @Test func persistedActiveProfileIsIgnoredWhenTheDockNoLongerMatchesIt() async {
+        let work = profile("Work", apps: [safari])
+        let home = profile("Home", apps: [notes])
+        let model = makeModel(
+            library: FakeLibrary([work, home]),
+            dock: FakeDockBackend(state: DockState(apps: [notes])),
+            activeRecord: InMemoryActiveProfileRecord(work.id)
+        )
+
+        await model.refresh()
+
+        #expect(model.activeProfileID == home.id)
+    }
+
+    @Test func exactMatchBeatsALooseOneWhenNothingWasRecorded() async {
+        var loose = profile("A loose")
+        loose.others = [link(nil)]
+        var exact = profile("B exact")
+        exact.others = [link("Example")]
+        let model = makeModel(
+            library: FakeLibrary([loose, exact]),
+            dock: FakeDockBackend(state: DockState(others: [link("Example")]))
+        )
+
+        await model.refresh()
+
+        #expect(model.activeProfileID == exact.id)
+    }
+
+    @Test func applyingAProfileRecordsItAndUndoForgetsIt() async {
+        let work = profile("Work", apps: [safari])
+        let record = InMemoryActiveProfileRecord()
+        let target = UndoTarget(id: UUID(), createdAt: Date(), summary: "Before applying profile Work")
+        let applier = FakeApplier { _, _ in .applied(report()) }
+        let model = makeModel(
+            library: FakeLibrary([work]), applier: applier, undoer: FakeUndoer(target: target), activeRecord: record
+        )
+        await model.refresh()
+
+        await model.performApply(work)
+        #expect(record.load() == work.id)
+
+        await model.performUndo()
+        #expect(record.load() == nil)
+    }
+
+    @Test func fileRecordRoundTripsTheProfileID() throws {
+        let url = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ohmydock-active-\(UUID().uuidString)/active-profile.json")
+        defer { try? FileManager.default.removeItem(at: url.deletingLastPathComponent()) }
+        let record = FileActiveProfileRecord(url: url)
+        #expect(record.load() == nil)
+
+        let id = UUID()
+        record.save(id)
+        #expect(FileActiveProfileRecord(url: url).load() == id)
+
+        record.save(nil)
+        #expect(record.load() == nil)
     }
 
     @Test func lastAppliedProfileWinsWhenSeveralMatch() async {

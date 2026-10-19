@@ -48,6 +48,11 @@ struct ItemInspector: View {
                     }
                 }
             ))
+            // Launching apps on switch is the AppSwitcher's job (Phase 4); nothing reads this yet.
+            .disabled(true)
+            Text("Available in v0.2")
+                .font(.caption)
+                .foregroundStyle(.secondary)
         }
     }
 

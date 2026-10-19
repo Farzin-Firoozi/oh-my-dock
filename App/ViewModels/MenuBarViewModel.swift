@@ -72,7 +72,10 @@ final class MenuBarViewModel {
     @ObservationIgnored private let bootstrap: (@Sendable () async throws -> Void)?
     @ObservationIgnored private let gate: DockOperationGate
 
-    @ObservationIgnored private var lastAppliedID: UUID?
+    @ObservationIgnored private let activeRecord: any ActiveProfileRecording
+    @ObservationIgnored private var lastAppliedID: UUID? {
+        didSet { activeRecord.save(lastAppliedID) }
+    }
     @ObservationIgnored private var operation: Task<Void, Never>?
     @ObservationIgnored private var pendingConfirmation: CheckedContinuation<Bool, Never>?
 
@@ -82,9 +85,12 @@ final class MenuBarViewModel {
         applier: any ProfileApplying,
         undoer: any DockUndoing,
         bootstrap: (@Sendable () async throws -> Void)? = nil,
-        gate: DockOperationGate = DockOperationGate()
+        gate: DockOperationGate = DockOperationGate(),
+        activeRecord: any ActiveProfileRecording = InMemoryActiveProfileRecord()
     ) {
         self.gate = gate
+        self.activeRecord = activeRecord
+        lastAppliedID = activeRecord.load()
         self.library = library
         self.dock = dock
         self.applier = applier
@@ -114,9 +120,22 @@ final class MenuBarViewModel {
         activeProfileID = current.flatMap(activeProfile(in:))?.id
     }
 
+    /// The profile the Dock currently shows. Of the profiles that match the Dock, the one applied
+    /// last wins (it survives relaunches); failing that, the closest match: the one whose tiles
+    /// equal the Dock's most exactly, labels and paths included, then the first by name.
     private func activeProfile(in current: DockState) -> Profile? {
         let matching = profiles.filter { $0.dockState.matchesAfterWrite(current) }
-        return matching.first { $0.id == lastAppliedID } ?? matching.first
+        if let id = lastAppliedID, let applied = matching.first(where: { $0.id == id }) { return applied }
+        func exactTiles(_ profile: Profile) -> Int {
+            DockSection.allCases.reduce(0) { total, section in
+                total + zip(profile.dockState[section], current[section]).filter { $0 == $1 }.count
+            }
+        }
+        // Only a strictly better score replaces the earlier candidate, so ties stay in name order.
+        return matching.reduce(nil) { best, candidate in
+            guard let best else { return candidate }
+            return exactTiles(candidate) > exactTiles(best) ? candidate : best
+        }
     }
 
     // MARK: Apply
