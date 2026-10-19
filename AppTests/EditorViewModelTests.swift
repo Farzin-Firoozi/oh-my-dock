@@ -267,6 +267,51 @@ private func makeModel(_ profiles: [Profile] = []) async -> (EditorViewModel, Fa
         #expect(await store.saved[source.id]?.hotkey == source.hotkey)
     }
 
+    @Test func fileTilesRequireAFileURL() async {
+        let (model, _) = await makeModel([Profile(name: "P")])
+        #expect(model.addFileURL(URL(string: "https://example.com/a.pdf")!) == nil)
+        #expect(model.addFileURL(URL(string: "ftp://example.com/a")!) == nil)
+        guard case .validation(.unsupportedURLScheme)? = model.error else {
+            Issue.record("expected an unsupported scheme error"); return
+        }
+        #expect(model.selectedProfile?.others.isEmpty == true)
+        #expect(model.addFileURL(URL(fileURLWithPath: "/tmp/notes.txt")) != nil)
+    }
+
+    @Test func droppedHTTPSURLBecomesALinkTile() async {
+        let (model, store) = await makeModel([Profile(name: "P", others: [.spacer(.normal)])])
+        let id = model.addDroppedURL(URL(string: "https://example.com/docs")!, dropped: (.others, 0))
+        await model.flush()
+
+        #expect(id != nil)
+        guard case .url(let item)? = model.selectedProfile?.others.first else {
+            Issue.record("expected a url tile first"); return
+        }
+        #expect(item.url.absoluteString == "https://example.com/docs")
+        #expect(await store.saved.values.first?.others.count == 2)
+    }
+
+    @Test func droppedNonHTTPSSchemesAreRejected() async {
+        let (model, _) = await makeModel([Profile(name: "P")])
+        for raw in ["http://example.com", "ftp://example.com/x", "mailto:a@example.com", "javascript:alert(1)", "data:text/plain,hi"] {
+            #expect(model.addDroppedURL(URL(string: raw)!) == nil, "\(raw)")
+            guard case .validation(.unsupportedURLScheme)? = model.error else {
+                Issue.record("expected an unsupported scheme error for \(raw)"); return
+            }
+            model.dismissError()
+        }
+        #expect(model.selectedProfile?.others.isEmpty == true)
+    }
+
+    @Test func droppedFileURLStillMakesAFileTile() async {
+        let (model, _) = await makeModel([Profile(name: "P")])
+        #expect(model.addDroppedURL(URL(fileURLWithPath: "/tmp/notes.txt")) != nil)
+        guard case .file(let file)? = model.selectedProfile?.others.first else {
+            Issue.record("expected a file tile"); return
+        }
+        #expect(file.path == "/tmp/notes.txt")
+    }
+
     @Test func addURLStringRequiresHTTPS() async {
         let (model, store) = await makeModel([Profile(name: "P")])
         #expect(model.addURLString("https://example.com", label: "Site") != nil)

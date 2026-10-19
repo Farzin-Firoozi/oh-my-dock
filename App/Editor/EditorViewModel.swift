@@ -187,14 +187,33 @@ final class EditorViewModel {
     // MARK: - Items
 
     /// Adds a tile for a file-system item (an app bundle, folder or file), such as one dropped
-    /// from Finder. Apps go to the apps section, everything else to others.
+    /// from Finder. Apps go to the apps section, everything else to others. Anything that isn't a
+    /// `file:` URL is refused: a web address must become a link tile (`addDroppedURL`), never a
+    /// "file" with a bogus path.
     /// - Parameter drop: where it was dropped. The position is honoured only when the item
     ///   belongs in that section (an app dropped on the others side is appended to the apps);
     ///   nil appends.
     @discardableResult
     func addFileURL(_ url: URL, dropped drop: (section: DockSection, slot: Int)? = nil) -> EditorItemID? {
+        guard url.isFileURL else {
+            error = .validation(.unsupportedURLScheme(.others, index: 0, url: url.absoluteString))
+            return nil
+        }
         let (section, item) = Self.tile(forFileURL: url)
         return insert(item, in: section, at: drop?.section == section ? drop?.slot : nil)
+    }
+
+    /// Adds whatever a drop delivered: a `file:` URL becomes a file, folder or app tile, an `https`
+    /// URL becomes a link tile through the same https-only input path as the add-link sheet, and
+    /// any other scheme is refused with an error.
+    @discardableResult
+    func addDroppedURL(_ url: URL, dropped drop: (section: DockSection, slot: Int)? = nil) -> EditorItemID? {
+        if url.isFileURL { return addFileURL(url, dropped: drop) }
+        guard url.scheme?.lowercased() == "https" else {
+            error = .validation(.unsupportedURLScheme(.others, index: 0, url: url.absoluteString))
+            return nil
+        }
+        return addURLString(url.absoluteString, at: drop?.section == .others ? drop?.slot : nil)
     }
 
     /// Adds an application from a bundle URL (picker or Spotlight list).

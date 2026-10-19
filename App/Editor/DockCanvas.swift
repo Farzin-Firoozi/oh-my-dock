@@ -132,7 +132,7 @@ struct StripDropDelegate: DropDelegate {
     @Binding var target: DropTarget?
 
     func validateDrop(info: DropInfo) -> Bool {
-        dragged != nil || info.hasItemsConforming(to: [.fileURL])
+        dragged != nil || info.hasItemsConforming(to: [.url])
     }
 
     func dropEntered(info: DropInfo) {
@@ -159,14 +159,14 @@ struct StripDropDelegate: DropDelegate {
             withAnimation(reorderSpring) { model.moveItem(id, to: drop.section, before: drop.slot) }
             return true
         }
-        let providers = info.itemProviders(for: [.fileURL])
+        let providers = info.itemProviders(for: [.url])
         guard !providers.isEmpty else { return false }
         for (offset, provider) in providers.enumerated() {
             let position = (section: drop.section, slot: drop.slot + offset)
             _ = provider.loadObject(ofClass: URL.self) { url, _ in
                 guard let url else { return }
                 Task { @MainActor in
-                    withAnimation(reorderSpring) { _ = model.addFileURL(url, dropped: position) }
+                    withAnimation(reorderSpring) { _ = model.addDroppedURL(url, dropped: position) }
                 }
             }
         }
