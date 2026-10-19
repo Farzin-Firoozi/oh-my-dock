@@ -561,6 +561,23 @@ struct ProfileApplierTests {
         #expect(await env.backend.state == DockState(apps: [calculator, notes], others: [Sample.example]))
     }
 
+    @Test func appResolvedToANewPathReplacesTheStaleTileInTheDock() async throws {
+        let stale = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: "/Users/me/Old/One.app"))
+        let env = try Env(current: DockState(apps: [stale]))
+        defer { env.cleanup() }
+        let wanted = DockItem.app(AppRef(bundleId: "com.x.one", name: "One"))
+        let resolver: ProfileApplier.AppPathResolver = { _ in "/Applications/One.app" }
+
+        let result = try await env.applier(resolvePath: resolver).apply(profile(apps: [wanted]))
+
+        guard case .applied = result else {
+            Issue.record("Expected .applied, got \(result)")
+            return
+        }
+        let expected = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: "/Applications/One.app"))
+        #expect(await env.backend.state == DockState(apps: [expected]))
+    }
+
     @Test func resolvedPathReplacesTheHintInTheTarget() async throws {
         let env = try Env()
         defer { env.cleanup() }

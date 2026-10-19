@@ -52,6 +52,19 @@ public extension DockItem {
         }
     }
 
+    /// Whether `actual`, already in the Dock, can stand in for `self` (the requested tile): like
+    /// ``matchesAfterWrite(_:)``, except that an app at a different path is a different tile even
+    /// when the bundle identifier is the same. Verifying a write may accept such a tile (the
+    /// Dock, not us, chose the path), but a requested path change has to be written.
+    func matchesWithoutPathChange(_ actual: DockItem) -> Bool {
+        if case let (.app(expected), .app(existing)) = (self, actual),
+           let expectedPath = expected.path, let existingPath = existing.path
+        {
+            return Self.pathsMatch(expectedPath, existingPath) && matchesAfterWrite(actual)
+        }
+        return matchesAfterWrite(actual)
+    }
+
     /// An expected label is a request, so the Dock must carry it. A missing or empty expected
     /// label means "let dockutil derive one", so any actual label is fine.
     private static func labelMatches(expected: String?, actual: String?) -> Bool {
@@ -61,14 +74,18 @@ public extension DockItem {
 
     private static func appsMatch(_ expected: AppRef, _ actual: AppRef) -> Bool {
         if let expectedPath = expected.path, let actualPath = actual.path {
-            if standardizedPath(expectedPath) == standardizedPath(actualPath) { return true }
-            if dockutilRewrote(expectedPath, to: actualPath) { return true }
+            if pathsMatch(expectedPath, actualPath) { return true }
             // Different location, same app: only the bundle identifier can still say so.
             return !expected.bundleId.isEmpty && expected.bundleId == actual.bundleId
         }
         // A path is missing on one side (a tile without `file-data`): fall back to identity.
         if expected.bundleId != actual.bundleId { return false }
         return !expected.bundleId.isEmpty || expected.name == actual.name
+    }
+
+    /// The same path, or the one dockutil writes for the requested one.
+    private static func pathsMatch(_ requested: String, _ written: String) -> Bool {
+        standardizedPath(requested) == standardizedPath(written) || dockutilRewrote(requested, to: written)
     }
 
     /// dockutil 3.1.3 (`DockUtil.swift:405-430`) swaps a missing `/Applications/X.app` for

@@ -426,8 +426,10 @@ public actor ProfileApplier {
     /// Replaces target tiles by the equivalent tile already in the Dock. The Dock cannot store
     /// profile-only fields (`launchOnSwitch`, `brewCask`, an app `name`, ...), and the diff
     /// compares tiles field by field, so without this every app would look changed on every apply.
-    /// "Equivalent" is `DockItem.matchesAfterWrite`, the rule the backend verifies writes with, so
-    /// substituting cannot change what a write is verified against.
+    /// "Equivalent" is `DockItem.matchesWithoutPathChange`: the rule the backend verifies writes
+    /// with, minus its tolerance for an app that moved (same bundle identifier, other path).
+    /// That tolerance suits verification, but here it would keep a stale path in the Dock when
+    /// the profile resolves the app somewhere else.
     static func canonicalized(_ target: DockState, against current: DockState) -> DockState {
         var result = target
         for section in DockSection.allCases {
@@ -444,7 +446,7 @@ public actor ProfileApplier {
                 }
             }
             for (i, item) in wanted.enumerated() where !matched[i] {
-                if let j = existing.indices.first(where: { !used[$0] && item.matchesAfterWrite(existing[$0]) }) {
+                if let j = existing.indices.first(where: { !used[$0] && item.matchesWithoutPathChange(existing[$0]) }) {
                     used[j] = true
                     result[section][i] = existing[j]
                 }

@@ -95,6 +95,27 @@ import Testing
         #expect(!matches(expected, written))
     }
 
+    @Test func canonicalizationTreatsSameBundleIdAtAnotherPathAsAChange() {
+        let requested = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: "/Applications/One.app"))
+        let moved = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: "/Users/me/Applications/One.app"))
+        #expect(requested.matchesAfterWrite(moved))
+        #expect(!requested.matchesWithoutPathChange(moved))
+    }
+
+    @Test func canonicalizationStillAcceptsDockutilsOwnRewrite() {
+        let requested = DockItem.app(AppRef(bundleId: "com.apple.Mail", name: "Mail", path: "/Applications/Mail.app"))
+        let written = DockItem.app(AppRef(bundleId: "com.apple.Mail", name: "Mail", path: "/System/Applications/Mail.app"))
+        let renamed = DockItem.app(AppRef(bundleId: "com.apple.Mail", name: "Mail", path: "/System/Applications/Other.app"))
+        #expect(requested.matchesWithoutPathChange(written))
+        #expect(!requested.matchesWithoutPathChange(renamed))
+    }
+
+    @Test func canonicalizationFallsBackToIdentityWhenAPathIsMissing() {
+        let hinted = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: nil))
+        let tile = DockItem.app(AppRef(bundleId: "com.x.one", name: "Uno", path: "/Applications/One.app"))
+        #expect(hinted.matchesWithoutPathChange(tile))
+    }
+
     @Test func sameBundleIdAtAnotherPathMatches() {
         let expected = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: "/Applications/One.app"))
         let written = DockItem.app(AppRef(bundleId: "com.x.one", name: "One", path: "/Users/me/Applications/One.app"))
