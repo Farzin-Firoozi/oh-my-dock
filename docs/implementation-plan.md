@@ -14,7 +14,7 @@ Covers the build from an empty repo to v0.4+. Read with [features.md](features.m
 | Project gen | **XcodeGen** (`project.yml`, no checked-in `.pbxproj` churn) |
 | Dock backend | Bundled **dockutil v3** behind `DockBackend` protocol |
 | Storage | JSON files in `~/Library/Application Support/oh-my-dock/` |
-| Distribution | Developer ID signed, notarized, GitHub Releases + Homebrew cask, Sparkle updates |
+| Distribution | Ad-hoc signed (no Apple Developer account), GitHub Releases + Homebrew cask; updates TBD (Sparkle or GitHub check) |
 | License | MIT (app), Apache-2.0 notice for dockutil |
 
 ## Architecture
@@ -43,7 +43,7 @@ oh-my-dock/
 │   └── Resources/
 │       └── Helpers/dockutil    # bundled, signed binary
 ├── CLI/                        # `ohmydock` command (v0.3), links OhMyDockCore
-├── scripts/                    # build-dockutil.sh, release.sh, notarize.sh
+├── scripts/                    # build-dockutil.sh, release.sh
 └── docs/
 ```
 
@@ -110,7 +110,7 @@ Each milestone ends with a working, shippable build.
 - [x] `scripts/build-dockutil.sh`: build dockutil v3 from a pinned tag, copy to `App/Resources/Helpers/`, sign with our identity. Add the Apache-2.0 LICENSE/NOTICE.
 - [x] **Spikes** (findings go into technical-notes.md):
   - [x] Can dockutil target a **non-live plist** (temp copy) for safe integration tests? Yes, temp plist file (spike 0.4).
-  - [x] Does `NSRunningApplication.terminate()` need any permission? Not on macOS 27.0.1, unmanaged machine, CLI + ad-hoc app + ad-hoc hardened app (spike 0.6). macOS 14/15, notarized build, MDM, save sheets/veto, sandboxed targets and `forceTerminate()` untested; see release gates.
+  - [x] Does `NSRunningApplication.terminate()` need any permission? Not on macOS 27.0.1, unmanaged machine, CLI + ad-hoc app + ad-hoc hardened app (spike 0.6). macOS 14/15, release build, MDM, save sheets/veto, sandboxed targets and `forceTerminate()` untested; see release gates.
   - [x] How URL and folder items appear in `dockutil --list` output, for round-trip parsing? Lossy; reads go through CFPreferences instead (spike 0.5).
 - [x] Empty `MenuBarExtra` app that launches, with `LSUIElement`.
 - [x] Menu bar glyph (SF Symbol `dock.rectangle`).
@@ -179,13 +179,14 @@ UI:
 
 ## Release pipeline (set up during M1)
 
-- `scripts/release.sh`: archive, then Developer ID sign inside-out (dockutil helper first with `--timestamp` + hardened runtime, then the app), then `notarytool submit --wait`, then staple, then DMG/zip, then Sparkle appcast.
+- No Apple Developer account, so no Developer ID signing or notarization. Users open the app with right-click → Open or `xattr -cr`; the README documents this.
+- `scripts/release.sh`: archive, then ad-hoc sign inside-out (dockutil helper first, then the app), then zip/DMG and sha256.
 - **Mandatory release gates** (block any release):
-  - Test quit/launch on macOS 14, 15, and current with the notarized Developer ID build on a clean TCC state (spike 0.6 covered only macOS 27, ad-hoc).
-  - Verify the dockutil license/NOTICE ships in `Contents/Resources`.
-  - Verify the helper is signed with Developer ID + `--timestamp` + hardened runtime before the app is signed.
-- GitHub Release + Homebrew cask (own tap first, e.g. `farzin/tap/oh-my-dock`; submit to `homebrew/cask` once notable). See [distribution.md](distribution.md).
-- Requires an Apple Developer account ($99/yr).
+  - Test quit/launch on macOS 14, 15, and current with the ad-hoc signed release build on a clean TCC state (spike 0.6 covered only macOS 27).
+  - Verify the dockutil and KeyboardShortcuts licenses ship in `Contents/Resources`.
+  - Verify helper and app signatures with `codesign --verify --deep --strict`.
+- GitHub Release + Homebrew cask (own tap first, e.g. `farzin/tap/oh-my-dock`). See [distribution.md](distribution.md).
+- Deferred until an Apple Developer account exists: Developer ID signing, notarization, stapling.
 
 ## Testing strategy
 
@@ -204,7 +205,7 @@ UI:
 | Corrupting the user's Dock | Snapshot before every apply; automatic rollback; Default profile on first launch |
 | Dock restart flicker on frequent triggers | Batch ops, debounce triggers, skip apply if the diff is empty |
 | macOS update changes the Dock plist format | Isolated behind `DockBackend`; dockutil upstream tracks changes |
-| Permission surprises (Wi-Fi SSID needs Location) | Quit needs none in the tested scope (spike 0.6; release gate covers macOS 14/15 + notarized build); Location requested on first use of the Wi-Fi trigger (M3) |
+| Permission surprises (Wi-Fi SSID needs Location) | Quit needs none in the tested scope (spike 0.6; release gate covers macOS 14/15 + release build); Location requested on first use of the Wi-Fi trigger (M3) |
 | Quitting apps loses user work | Graceful terminate only; force quit never automatic (explicit user action only, off by default, with a warning); confirmation sheet |
 | dockutil reports success but nothing was written | Re-read the Dock after every write and compare; never trust exit codes |
 

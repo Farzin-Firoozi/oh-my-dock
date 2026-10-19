@@ -18,7 +18,7 @@ brew install --cask oh-my-dock                # official homebrew/cask (later)
 ### Phase 2: official `homebrew/cask`
 
 - Submit once the project is **notable enough**. Homebrew rejects casks for little-known projects, and the bar is higher for self-submitted ones. Check the current thresholds in Homebrew's "Acceptable Casks" docs before submitting.
-- The app must be **signed with Developer ID and notarized**. Homebrew is phasing out casks that fail Gatekeeper.
+- Homebrew is phasing out casks that fail Gatekeeper, so the official cask is **blocked until the app is Developer ID signed and notarized** (needs an Apple Developer account). Until then, the own tap is the only Homebrew route.
 - Requires a stable download URL (GitHub Releases), versioned artifacts, and a working `livecheck`.
 
 ### Cask draft
@@ -58,7 +58,7 @@ The `<user>` placeholders and the bundle ID get filled in once the GitHub org an
 
 ### Release checklist (per version)
 
-1. `scripts/release.sh`: archive → sign (app + bundled dockutil, hardened runtime) → notarize → staple → zip.
-2. Publish a GitHub Release with the zip; update the Sparkle appcast.
+1. `scripts/release.sh`: archive → ad-hoc sign (bundled dockutil first, then app) → zip + sha256. No notarization (no Apple Developer account).
+2. Publish a GitHub Release with the zip; update the appcast if Sparkle is used (Phase 3.2).
 3. The tap action updates `version` + `sha256` and opens/merges a PR in `homebrew-tap`.
-4. Smoke test: `brew uninstall --cask oh-my-dock; brew install --cask <user>/tap/oh-my-dock`, launch it, and confirm Gatekeeper passes with no warning.
+4. Smoke test: `brew uninstall --cask oh-my-dock; brew install --cask <user>/tap/oh-my-dock`, launch it, and confirm the cask clears quarantine and the app opens (Gatekeeper warns on a direct download; the README documents right-click → Open / `xattr -cr`).

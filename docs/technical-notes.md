@@ -51,8 +51,8 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 ## Distribution
 
 - **Not on the Mac App Store.** The sandbox blocks writing `com.apple.dock` preferences, running `killall Dock`, and terminating other apps.
-- Ship as a **Developer ID–signed, notarized** app: direct download + Homebrew cask.
-- Updates via Sparkle.
+- Ship as an **ad-hoc signed, not notarized** app (no Apple Developer account): direct download + Homebrew cask. Users bypass Gatekeeper via right-click → Open or `xattr -cr`.
+- Updates: Sparkle (free EdDSA key) or a GitHub Releases check; decided in Phase 3.2.
 - **Bundled dockutil is Apache-2.0**: include its LICENSE and NOTICE in the app bundle and repo (third-party notices).
 
 ## Privacy
@@ -71,5 +71,5 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 
 ## Open questions
 
-- Release gate (Phase 3): re-verify `terminate()` / launch on macOS 14, 15 and current with a notarized Developer ID build on a clean TCC state.
+- Release gate (Phase 3): re-verify `terminate()` / launch on macOS 14, 15 and current with the ad-hoc signed release build on a clean TCC state.
 - Verify `forceTerminate()` behavior separately before shipping force quit.

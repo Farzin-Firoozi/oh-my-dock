@@ -31,4 +31,4 @@ killall Dock
 
 ## Business model
 
-**Free and open source (MIT).** Every feature is free, with no paid tier. Funding comes from GitHub Sponsors and donations. Distributed through GitHub Releases and a Homebrew cask (Developer ID–signed and notarized).
+**Free and open source (MIT).** Every feature is free, with no paid tier. Funding comes from GitHub Sponsors and donations. Distributed through GitHub Releases and a Homebrew cask (ad-hoc signed, not notarized: no Apple Developer account, so Gatekeeper needs right-click → Open or `xattr -cr` on first open).

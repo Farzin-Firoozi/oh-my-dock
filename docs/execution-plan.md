@@ -72,19 +72,23 @@ Short names used below: **Haiku**, **Sonnet**, **Opus** (Claude) · **Composer**
 
 ## Phase 3: Release pipeline (parallel with Phase 2)
 
+No Apple Developer account and none planned, so releases are **ad-hoc signed and not notarized**. Users get past Gatekeeper with right-click → Open or `xattr -cr`. Developer ID signing and notarization are deferred until an account exists.
+
 | # | Task | Model | Group |
 |---|---|---|---|
-| 3.1 | `scripts/release.sh`: archive, Developer ID sign (helper first with `--timestamp` + hardened runtime, then app: inside-out), notarize, staple, zip | Sonnet | A |
-| 3.2 | Sparkle integration + appcast generation | Terra | A |
-| 3.3 | `homebrew-tap` cask + GitHub Action bumping version/sha256 | Composer | B |
-| 3.4 | README (install, usage) | Haiku | B |
-| 3.5 | 🔴 **Release gate:** test quit/launch (`terminate()`, `openApplication`) on macOS 14, 15, and current with the notarized Developer ID build on a clean TCC state (spike 0.6 only covered macOS 27, ad-hoc) | Sonnet | C |
-| 3.6 | **Release gate:** verify the dockutil license/NOTICE ships in `Contents/Resources`; verify helper signature (Developer ID, `--timestamp`, hardened runtime) with `codesign --verify --deep --strict` | Flash-M | C |
-| 3.R | Security review of the signing/update path: Sol + Grok · Verify: Terra | Sol + Grok + Composer | D |
+| 3.1 | `scripts/release.sh`: archive, ad-hoc sign (helper first, then app: inside-out), zip/DMG, sha256. No notarization | Sonnet | A |
+| 3.2 | Updates: decide between Sparkle (free EdDSA key, appcast on GitHub Pages) and a "new version available" check against GitHub Releases; verify Sparkle works with ad-hoc signing before committing | Terra | A |
+| 3.3 | `homebrew-tap` cask (own tap, `postflight` clears quarantine) + GitHub Action bumping version/sha256 | Composer | B |
+| 3.4 | README (install incl. Gatekeeper workaround, usage) | Haiku | B |
+| 3.5 | 🔴 **Release gate:** test quit/launch (`terminate()`, `openApplication`) on macOS 14, 15, and current with the ad-hoc signed release build on a clean TCC state (spike 0.6 only covered macOS 27) | Sonnet | C |
+| 3.6 | **Release gate:** verify the dockutil license/NOTICE and KeyboardShortcuts license ship in `Contents/Resources`; verify helper and app signatures with `codesign --verify --deep --strict` (ad-hoc) | Flash-M | C |
+| 3.R | Review of the release/update path: Sol + Grok · Verify: Terra | Sol + Grok + Composer | D |
 
 **Release gates (mandatory, block any release):** 3.5 and 3.6 pass. No release ships quit/launch without 3.5.
 
-**Needs from user:** Apple Developer account, GitHub org/username, bundle ID.
+**Needs from user:** GitHub org/username, bundle ID (currently `app.ohmydock.OhMyDock`).
+
+**Deferred (needs a paid account):** Developer ID signing, notarization, stapling, notarized-build gate test. "Launch at login" may fail to register with ad-hoc signing; test it and keep a fallback.
 
 ## Phase 4: v0.2 (M2)
 
