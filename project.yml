@@ -38,6 +38,12 @@ targets:
           copyFiles:
             destination: resources
             subpath: ThirdParty/dockutil
+      # MIT: ship KeyboardShortcuts' license with the app.
+      - path: ThirdParty/KeyboardShortcuts/LICENSE
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: ThirdParty/KeyboardShortcuts
       - path: THIRD_PARTY_NOTICES.md
         buildPhase: resources
     dependencies:
