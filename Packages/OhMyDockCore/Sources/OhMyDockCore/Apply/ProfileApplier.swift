@@ -142,6 +142,7 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 ///    accepts; without it `ApplyError.confirmationRequired`. If that would empty a section the
 ///    profile fills, `ApplyError.wouldEmptySection`, confirmed or not. Unsatisfiable plan, or one the backend refuses up front (`preflight`): throw. Nothing was
 ///    written, so nothing is restored or restarted. Empty plan: `.noChanges`. No snapshot, no restart.
+///    Apps left out still need `confirm`: without it, even an empty plan throws `confirmationRequired`.
 /// 3. `confirm` declines: `.cancelled`.
 /// 4. Snapshot the Dock, then re-read it. When it no longer equals the state the plan was
 ///    computed from (someone edited the Dock meanwhile), throw `ApplyError.dockChanged`: the
@@ -149,8 +150,9 @@ public enum ApplyError: Error, LocalizedError, Sendable {
 /// 5. `backend.apply`, then one `restarter.restart()`, then a re-read of the Dock: the restarted
 ///    Dock must still hold what was written (it loads the preferences and may rewrite them).
 /// 6. Any error from 5 (including that re-read not matching), or a cancellation seen after the backend finished: restore the snapshot,
-///    restart once, then throw `ApplyError.failedAndRolledBack` (or `.cancelled`). If the
-///    restore or the restart fails: `ApplyError.rollbackFailed` with the snapshot id.
+///    restart once and re-read the Dock, which must equal the pre-apply Dock, then throw
+///    `ApplyError.failedAndRolledBack` (or `.cancelled`). If the restore, the restart or that
+///    re-read check fails: `ApplyError.rollbackFailed` with the snapshot id.
 ///
 /// The `confirm` closure is raced against cancellation: a dialog that stays open (or ignores
 /// cancellation) cannot hold up the cancelled apply, so it cannot hold up the next one either. Its
@@ -297,11 +299,14 @@ public actor ProfileApplier {
             if let section = first.emptiedSections.first {
                 throw ApplyError.wouldEmptySection(section, skipped: first.skipped.filter { $0.section == section })
             }
-            if first.plan.isEmpty { return .noChanges(first) }
-            // Leaving apps out is only allowed with the user's say-so.
+            // Leaving apps out needs the user's say-so even when the rest of the profile is
+            // already on the Dock, so a headless caller cannot be told "no changes" while part of
+            // the profile was silently dropped. With `confirm`, an empty plan returns
+            // `.noChanges` without asking (nothing is written); `preview.skipped` lists the apps.
             if confirm == nil, !first.skipped.isEmpty {
                 throw ApplyError.confirmationRequired(skipped: first.skipped)
             }
+            if first.plan.isEmpty { return .noChanges(first) }
             if Task.isCancelled { return .cancelled(rolledBack: false) }
 
             if let confirm {
@@ -366,7 +371,7 @@ public actor ProfileApplier {
         }
 
         let original = failure ?? CancellationError()
-        if let rollbackError = await rollBack(to: snapshot) {
+        if let rollbackError = await rollBack(to: snapshot, expecting: preview.current) {
             throw ApplyError.rollbackFailed(original: original, rollback: rollbackError, snapshotID: snapshot.id)
         }
         if original is CancellationError {
@@ -407,18 +412,25 @@ public actor ProfileApplier {
 
     // MARK: Rollback
 
-    /// Restores the snapshot, then restarts the Dock once. Returns the error if either failed;
-    /// the restart is skipped when the restore failed (a restart would load the half-written
-    /// preferences). Runs detached so the cancellation that may have triggered the rollback
+    /// Restores the snapshot, restarts the Dock once, then re-reads the Dock and checks it is the
+    /// state it had before the apply (`original`). Returns the error if any step failed; the
+    /// restart is skipped when the restore failed (a restart would load the half-written
+    /// preferences). A restart that reloads the failed state is a failed rollback, not a
+    /// successful one. Runs detached so the cancellation that may have triggered the rollback
     /// cannot cut it short.
-    private func rollBack(to snapshot: Snapshot) async -> (any Error)? {
+    private func rollBack(to snapshot: Snapshot, expecting original: DockState) async -> (any Error)? {
         let snapshots = snapshots
         let restarter = restarter
+        let backend = backend
         let id = snapshot.id
         return await Task.detached {
             do {
                 try await snapshots.restore(id: id, createSafetySnapshot: false)
                 try await restarter.restart()
+                let actual = try await backend.read()
+                guard original.matchesAfterWrite(actual) else {
+                    throw DockBackendError.verificationFailed(expected: original, actual: actual)
+                }
                 return nil
             } catch {
                 return error

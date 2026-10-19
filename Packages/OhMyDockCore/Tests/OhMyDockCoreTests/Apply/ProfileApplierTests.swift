@@ -12,9 +12,12 @@ private actor FakeDomainIO: DockDomainIO {
     private(set) var data: Data
     private(set) var imports: [Data] = []
     private var failImports = false
+    private let onImport: (@Sendable () async -> Void)?
 
-    init(data: Data) {
+    /// `onImport` stands in for the Dock loading the imported preferences.
+    init(data: Data, onImport: (@Sendable () async -> Void)? = nil) {
         self.data = data
+        self.onImport = onImport
     }
 
     func exportDomain(to url: URL) async throws {
@@ -26,6 +29,7 @@ private actor FakeDomainIO: DockDomainIO {
         let imported = try Data(contentsOf: url)
         imports.append(imported)
         data = imported
+        await onImport?()
     }
 
     func failImports(_ fail: Bool) {
@@ -190,11 +194,22 @@ private struct Env {
     let backend: FakeDockBackend
     let restarter: CountingRestarter
 
-    init(current: DockState = DockState(), failingRestarts: Set<Int> = []) throws {
+    /// With `rollbackRevertsDock` false, restoring the snapshot leaves the Dock in the failed
+    /// state, as when the restarted Dock reloads preferences that were not really restored.
+    init(
+        current: DockState = DockState(),
+        failingRestarts: Set<Int> = [],
+        rollbackRevertsDock: Bool = true
+    ) throws {
         root = try makeTempDirectory("omd-applier")
-        io = FakeDomainIO(data: try dockPlistData())
+        let backend = FakeDockBackend(state: current)
+        self.backend = backend
+        var onImport: (@Sendable () async -> Void)?
+        if rollbackRevertsDock {
+            onImport = { await backend.setState(current) }
+        }
+        io = FakeDomainIO(data: try dockPlistData(), onImport: onImport)
         store = SnapshotStore(rootDirectory: root.appendingPathComponent("snapshots"), domainIO: io)
-        backend = FakeDockBackend(state: current)
         restarter = CountingRestarter(failing: failingRestarts)
     }
 
@@ -917,6 +932,22 @@ struct ProfileApplierTests {
         #expect(await env.io.imports.count == 1)
     }
 
+    @Test func rollbackThatTheRestartedDockDoesNotHoldIsReportedAsFailed() async throws {
+        let env = try Env(current: DockState(apps: [calendarApp]), rollbackRevertsDock: false)
+        defer { env.cleanup() }
+        await env.backend.corruptNextWrite()
+
+        let error = await applyError { try await env.applier().apply(profile(apps: [notes])) }
+
+        guard case let .rollbackFailed(original, rollback, snapshotID)? = error else {
+            Issue.record("Expected rollbackFailed, got \(String(describing: error))")
+            return
+        }
+        #expect(original is DockBackendError)
+        #expect(rollback is DockBackendError)
+        #expect(await env.snapshots.map(\.id) == [snapshotID])
+    }
+
     @Test func rollbackFailureMessageNamesTheSnapshot() {
         let id = UUID()
         let error = ApplyError.rollbackFailed(original: RestartFailure(), rollback: ImportFailure(), snapshotID: id)
@@ -1010,6 +1041,33 @@ struct ProfileApplierTests {
         #expect(await env.backend.appliedBatches.isEmpty)
         #expect(await env.snapshots.isEmpty)
         #expect(await env.restarter.count == 0)
+    }
+
+    @Test func emptyPlanWithSkippedAppsStillNeedsConfirmation() async throws {
+        let env = try Env(current: DockState(apps: [calculator]))
+        defer { env.cleanup() }
+        let missing = AppRef(bundleId: "com.example.missing", name: "Missing")
+        let resolve: ProfileApplier.AppPathResolver = { $0.bundleId == missing.bundleId ? nil : $0.path }
+
+        let error = await applyError {
+            try await env.applier(resolvePath: resolve)
+                .apply(profile(apps: [calculator, .app(missing)]))
+        }
+
+        guard case let .confirmationRequired(skipped)? = error else {
+            Issue.record("Expected confirmationRequired, got \(String(describing: error))")
+            return
+        }
+        #expect(skipped.map(\.app.bundleId) == [missing.bundleId])
+
+        // With a confirm closure the empty plan is still `.noChanges`, listing what was left out.
+        let result = try await env.applier(resolvePath: resolve)
+            .apply(profile(apps: [calculator, .app(missing)])) { _ in true }
+        guard case let .noChanges(preview) = result else {
+            Issue.record("Expected .noChanges, got \(result)")
+            return
+        }
+        #expect(preview.skipped.count == 1)
     }
 
     @Test func noChangesLeavesNoSnapshotEvenAfterAConfirmation() async throws {

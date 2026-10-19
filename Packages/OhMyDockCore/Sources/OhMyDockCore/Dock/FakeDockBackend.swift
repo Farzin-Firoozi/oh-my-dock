@@ -54,6 +54,11 @@ public actor FakeDockBackend: DockBackend {
         }
     }
 
+    /// Replaces the state without recording an apply, as if the Dock reloaded other preferences.
+    public func setState(_ newState: DockState) {
+        state = newState
+    }
+
     public func failNextApply(with error: any Error & Sendable) {
         nextApplyError = error
     }
