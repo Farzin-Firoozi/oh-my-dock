@@ -179,11 +179,13 @@ final class EditorViewModel {
 
     /// Adds a tile for a file-system item (an app bundle, folder or file), such as one dropped
     /// from Finder. Apps go to the apps section, everything else to others.
-    /// - Parameter slot: insertion index in that section; nil appends.
+    /// - Parameter drop: where it was dropped. The position is honoured only when the item
+    ///   belongs in that section (an app dropped on the others side is appended to the apps);
+    ///   nil appends.
     @discardableResult
-    func addFileURL(_ url: URL, at slot: Int? = nil) -> EditorItemID? {
+    func addFileURL(_ url: URL, dropped drop: (section: DockSection, slot: Int)? = nil) -> EditorItemID? {
         let (section, item) = Self.tile(forFileURL: url)
-        return insert(item, in: section, at: slot)
+        return insert(item, in: section, at: drop?.section == section ? drop?.slot : nil)
     }
 
     @discardableResult
