@@ -161,7 +161,7 @@ import Testing
         }
     }
 
-    @Test func readerFailureDoesNotWriteMarkerKeepsSnapshot() async throws {
+    @Test func readerFailureDoesNotWriteMarkerOrSnapshot() async throws {
         struct ReaderError: Error, Equatable {}
 
         let tempDir = try makeTempDir()
@@ -188,13 +188,10 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: markerURL.path))
         #expect(await profileStore.list().profiles.isEmpty)
 
-        let snapshots = await snapshotStore.list().snapshots
-        #expect(snapshots.count == 1)
-        #expect(snapshots.first?.reason == "First launch")
-        #expect(snapshots.first?.pinned == true)
+        #expect(await snapshotStore.list().snapshots.isEmpty)
     }
 
-    @Test func validationFailureDoesNotWriteMarkerKeepsSnapshot() async throws {
+    @Test func validationFailureDoesNotWriteMarkerOrSnapshot() async throws {
         let tempDir = try makeTempDir()
         defer { cleanup(tempDir) }
 
@@ -223,10 +220,7 @@ import Testing
         #expect(!FileManager.default.fileExists(atPath: markerURL.path))
         #expect(await profileStore.list().profiles.isEmpty)
 
-        let snapshots = await snapshotStore.list().snapshots
-        #expect(snapshots.count == 1)
-        #expect(snapshots.first?.reason == "First launch")
-        #expect(snapshots.first?.pinned == true)
+        #expect(await snapshotStore.list().snapshots.isEmpty)
     }
 
     @Test func nameCollisionCreatesDefault2() async throws {
@@ -345,6 +339,70 @@ import Testing
         #expect(await profileStore.list().profiles.count == 1)
         #expect(await snapshotStore.list().snapshots.count == 1)
         #expect(FileManager.default.fileExists(atPath: markerURL.path))
+    }
+
+    @Test func retryAfterFailureReusesSinglePinnedSnapshot() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        let profilesDir = tempDir.appendingPathComponent("profiles")
+        let snapshotStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist())
+        )
+        let markerURL = tempDir.appendingPathComponent(".first-launch-complete")
+
+        // Profiles root is a regular file, so saving the profile fails after the snapshot exists.
+        try Data().write(to: profilesDir)
+        let failing = FirstLaunchBootstrapper(
+            reader: { DockState() },
+            profileStore: ProfileStore(rootDirectory: profilesDir),
+            snapshotStore: snapshotStore,
+            markerURL: markerURL
+        )
+        await #expect(throws: (any Error).self) { try await failing.runIfNeeded() }
+        #expect(!FileManager.default.fileExists(atPath: markerURL.path))
+        let firstSnapshots = await snapshotStore.list().snapshots
+        #expect(firstSnapshots.count == 1)
+
+        try FileManager.default.removeItem(at: profilesDir)
+        let retry = FirstLaunchBootstrapper(
+            reader: { DockState() },
+            profileStore: ProfileStore(rootDirectory: profilesDir),
+            snapshotStore: snapshotStore,
+            markerURL: markerURL
+        )
+        let result = try await retry.runIfNeeded()
+        guard case .created(_, let snapshot, _) = result else {
+            Issue.record("Expected .created but got \(result)")
+            return
+        }
+        #expect(snapshot.id == firstSnapshots[0].id)
+        #expect(await snapshotStore.list().snapshots.count == 1)
+    }
+
+    @Test func unpinnedFirstLaunchSnapshotIsNotReused() async throws {
+        let tempDir = try makeTempDir()
+        defer { cleanup(tempDir) }
+
+        let snapshotStore = SnapshotStore(
+            rootDirectory: tempDir.appendingPathComponent("snapshots"),
+            domainIO: FakeDockDomainIO(domainData: try dockPlist())
+        )
+        let unpinned = try await snapshotStore.save(reason: "First launch", pinned: false)
+        let bootstrapper = FirstLaunchBootstrapper(
+            reader: { DockState() },
+            profileStore: ProfileStore(rootDirectory: tempDir.appendingPathComponent("profiles")),
+            snapshotStore: snapshotStore,
+            markerURL: tempDir.appendingPathComponent(".first-launch-complete")
+        )
+        let result = try await bootstrapper.runIfNeeded()
+        guard case .created(_, let snapshot, _) = result else {
+            Issue.record("Expected .created but got \(result)")
+            return
+        }
+        #expect(snapshot.id != unpinned.id)
+        #expect(snapshot.pinned)
     }
 
     // MARK: - Helpers

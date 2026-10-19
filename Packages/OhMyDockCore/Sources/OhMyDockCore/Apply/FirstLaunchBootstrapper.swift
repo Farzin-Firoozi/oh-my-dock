@@ -74,9 +74,10 @@ public struct FirstLaunchBootstrapper: Sendable {
     ///
     /// - Skips if the marker file already exists or if `skipIfProfilesExist` is true
     ///   and the profile store contains at least one profile (in which case the marker is written).
-    /// - Otherwise, captures a pinned snapshot, reads the current Dock, filters out `.unknown` items,
-    ///   creates and saves a profile named "Default" (or "Default (2)" on collision), and writes
-    ///   the marker file atomically.
+    /// - Otherwise reads the current Dock, filters out `.unknown` items and validates a profile
+    ///   named "Default" (or "Default (2)" on collision). Only then does it pin a "First launch"
+    ///   snapshot (reusing an existing pinned one), save the profile and write the marker file
+    ///   atomically. A failed read or validation leaves no snapshot behind.
     /// - Thread-safe and serialized by an internal coordinator.
     public func runIfNeeded(skipIfProfilesExist: Bool? = nil) async throws -> Result {
         let shouldSkipIfProfiles = skipIfProfilesExist ?? self.skipIfProfilesExist
@@ -100,17 +101,10 @@ public struct FirstLaunchBootstrapper: Sendable {
             // 3. Resolve profile name
             let profileName = await self.resolveProfileName(base: "Default")
 
-            // 4. Take a PINNED snapshot first (reason: "First launch")
-            let snapshot = try await snapshotStore.save(
-                reason: "First launch",
-                profileName: profileName,
-                pinned: true
-            )
-
-            // 5. Read the Dock
+            // 4. Read the Dock
             let dockState = try await reader()
 
-            // 6. Filter out `.unknown` items and build profile
+            // 5. Filter out `.unknown` items and build profile
             var validApps: [DockItem] = []
             var validOthers: [DockItem] = []
             var droppedItems: [DockItem] = []
@@ -139,6 +133,11 @@ public struct FirstLaunchBootstrapper: Sendable {
 
             try profile.validate()
 
+            // 6. Only now that the capture is known good, pin a safety snapshot. A failed
+            // attempt leaves nothing behind, and a retry reuses the snapshot of an earlier
+            // attempt that got this far instead of piling up another pinned one.
+            let snapshot = try await pinnedFirstLaunchSnapshot(profileName: profileName)
+
             // 7. Save profile to store
             try await profileStore.save(profile)
 
@@ -147,6 +146,22 @@ public struct FirstLaunchBootstrapper: Sendable {
 
             return .created(profile: profile, snapshot: snapshot, droppedItems: droppedItems)
         }
+    }
+
+    static let snapshotReason = "First launch"
+
+    /// The newest pinned first-launch snapshot, or a new one when none exists yet.
+    private func pinnedFirstLaunchSnapshot(profileName: String) async throws -> Snapshot {
+        let existing = await snapshotStore.list().snapshots
+            .first { $0.pinned && $0.reason == Self.snapshotReason }
+        if let existing {
+            return existing
+        }
+        return try await snapshotStore.save(
+            reason: Self.snapshotReason,
+            profileName: profileName,
+            pinned: true
+        )
     }
 
     private func writeMarkerAtomically(fileManager: FileManager) throws {
