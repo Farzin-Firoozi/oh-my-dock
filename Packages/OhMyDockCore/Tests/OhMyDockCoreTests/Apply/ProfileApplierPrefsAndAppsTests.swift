@@ -445,6 +445,24 @@ struct ProfileApplierPrefsAndAppsTests {
         #expect(await w.backend.appliedBatches.isEmpty)
     }
 
+    @Test func confirmationWithExclusionsKeepsExcludedAppsRunning() async throws {
+        let w = try World()
+        defer { w.cleanup() }
+        w.runSlack()
+        w.rig.apps.add(info(20, figma, name: "Figma"), behavior: .quitsImmediately)
+        let previous = Profile(name: "Previous", apps: [.app(ref(slack)), .app(ref(figma))])
+
+        let result = try await w.applier().apply(target(apps: [calculator]), from: previous) { preview in
+            #expect(preview.willQuitApps.map(\.name).sorted() == ["Figma", "Slack"])
+            return ApplyConfirmResult(accepted: true, excludedBundleIDs: [slack])
+        }
+        guard case .applied = result else {
+            Issue.record("expected .applied, got \(result)")
+            return
+        }
+        #expect(w.rig.apps.terminated == [20])
+    }
+
     @Test func automaticTriggerCannotQuitWithoutOptInOrConfirmation() async throws {
         let w = try World()
         defer { w.cleanup() }

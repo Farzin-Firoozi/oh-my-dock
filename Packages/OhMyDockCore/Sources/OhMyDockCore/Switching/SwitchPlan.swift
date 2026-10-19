@@ -10,6 +10,11 @@ public struct ProtectedApp: Hashable, Sendable {
 
     public let app: RunningAppInfo
     public let reason: Reason
+
+    public init(app: RunningAppInfo, reason: Reason) {
+        self.app = app
+        self.reason = reason
+    }
 }
 
 /// What a switch will do, computed without touching any process.
@@ -38,6 +43,24 @@ public struct SwitchPlan: Hashable, Sendable {
         self.willKeep = willKeep
         self.willLaunch = willLaunch
         self.protected = protected
+    }
+
+    /// Returns a copy of the plan where apps whose bundle IDs are in `bundleIDs`
+    /// are moved from `willQuit` to `willKeep` (left running for this switch only).
+    public func excluding(bundleIDs: Set<String>) -> SwitchPlan {
+        guard !bundleIDs.isEmpty else { return self }
+        let normalized = Set(bundleIDs.compactMap { normalizedBundleId($0) })
+        var copy = self
+        var newQuit: [RunningAppInfo] = []
+        for app in copy.willQuit {
+            if let id = normalizedBundleId(app.bundleId), normalized.contains(id) {
+                copy.willKeep.append(app)
+            } else {
+                newQuit.append(app)
+            }
+        }
+        copy.willQuit = newQuit
+        return copy
     }
 }
 

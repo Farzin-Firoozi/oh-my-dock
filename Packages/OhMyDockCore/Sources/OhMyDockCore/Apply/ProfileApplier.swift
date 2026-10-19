@@ -378,16 +378,25 @@ public actor ProfileApplier {
 
     public func apply(
         _ profile: Profile,
-        confirm: (@Sendable (ApplyPreview) async -> Bool)? = nil
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)? = nil
     ) async throws -> ApplyResult {
         try await apply(profile, from: nil, trigger: .user, confirm: confirm)
     }
 
     public func apply(
         _ profile: Profile,
+        confirm: @escaping @Sendable (ApplyPreview) async -> Bool
+    ) async throws -> ApplyResult {
+        try await apply(profile, from: nil, trigger: .user, confirm: { preview in
+            ApplyConfirmResult(accepted: await confirm(preview))
+        })
+    }
+
+    public func apply(
+        _ profile: Profile,
         from source: Profile?,
         trigger: ApplyTrigger = .user,
-        confirm: (@Sendable (ApplyPreview) async -> Bool)? = nil
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)? = nil
     ) async throws -> ApplyResult {
         let previous = inFlight
         previous?.task.cancel()
@@ -409,11 +418,22 @@ public actor ProfileApplier {
         return try result.get()
     }
 
+    public func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger = .user,
+        confirm: @escaping @Sendable (ApplyPreview) async -> Bool
+    ) async throws -> ApplyResult {
+        try await apply(profile, from: source, trigger: trigger, confirm: { preview in
+            ApplyConfirmResult(accepted: await confirm(preview))
+        })
+    }
+
     private func run(
         _ profile: Profile,
         source: Profile?,
         trigger: ApplyTrigger,
-        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
     ) async throws -> ApplyResult {
         if Task.isCancelled { return .cancelled(rolledBack: false) }
 
@@ -422,6 +442,7 @@ public actor ProfileApplier {
         let snapshot: Snapshot
         let expected: DockState
         let prefsImage: DockPrefsRollbackImage?
+        var planToExecute: SwitchPlan?
         do {
             try validate(profile)
             let resolved = resolve(profile)
@@ -452,14 +473,18 @@ public actor ProfileApplier {
             if first.isNoOp { return .noChanges(first) }
             if Task.isCancelled { return .cancelled(rolledBack: false) }
 
+            planToExecute = first.switchPlan
             if let confirm {
-                let accepted = await Self.confirmation(confirm, for: first)
-                if !accepted || Task.isCancelled { return .cancelled(rolledBack: false) }
+                let answer = await Self.confirmation(confirm, for: first)
+                if !answer.accepted || Task.isCancelled { return .cancelled(rolledBack: false) }
+                if !answer.excludedBundleIDs.isEmpty {
+                    planToExecute = planToExecute?.excluding(bundleIDs: answer.excludedBundleIDs)
+                }
             }
 
             // The Dock already matches: only apps to quit/launch. No snapshot, nothing to restore.
             if !first.hasDockChanges {
-                return .appsOnly(await switchApps(first.switchPlan) ?? SwitchOutcome())
+                return .appsOnly(await switchApps(planToExecute) ?? SwitchOutcome())
             }
 
             expected = try first.current.applying(first.plan.operations)
@@ -568,7 +593,7 @@ public actor ProfileApplier {
             // The Dock change is committed and verified; only now are apps asked to quit. A switch
             // that rolled back never gets here, and a cancellation from now on stops the app phase
             // but does not undo the Dock.
-            let outcome = await switchApps(preview.switchPlan)
+            let outcome = await switchApps(planToExecute)
             return .applied(ApplyReport(
                 plan: plan,
                 snapshotID: snapshot.id,
@@ -617,12 +642,12 @@ public actor ProfileApplier {
     /// not `confirm` ever returns. `confirm` runs in its own task, which is cancelled on a cancel
     /// and whose answer is ignored once this has returned.
     private static func confirmation(
-        _ confirm: @escaping @Sendable (ApplyPreview) async -> Bool,
+        _ confirm: @escaping @Sendable (ApplyPreview) async -> ApplyConfirmResult,
         for preview: ApplyPreview
-    ) async -> Bool {
-        let race = ConfirmationRace()
+    ) async -> ApplyConfirmResult {
+        let race = ConfirmationRace<ApplyConfirmResult>()
         return await withTaskCancellationHandler {
-            await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            await withCheckedContinuation { continuation in
                 race.start(continuation) {
                     Task {
                         let answer = await confirm(preview)
@@ -631,7 +656,7 @@ public actor ProfileApplier {
                 }
             }
         } onCancel: {
-            race.resolve(false)
+            race.resolve(.cancelled)
         }
     }
 
@@ -809,14 +834,14 @@ private struct PrefsRollbackMismatch: Error, CustomStringConvertible {
 }
 
 /// Resolves exactly once, with the first of "the user answered" and "the apply was cancelled".
-private final class ConfirmationRace: @unchecked Sendable {
+private final class ConfirmationRace<Answer: Sendable>: @unchecked Sendable {
     private let lock = NSLock()
-    private var continuation: CheckedContinuation<Bool, Never>?
+    private var continuation: CheckedContinuation<Answer, Never>?
     private var task: Task<Void, Never>?
-    private var answer: Bool?
+    private var answer: Answer?
 
     /// Hands over the continuation and starts the confirmation, unless it was resolved already.
-    func start(_ continuation: CheckedContinuation<Bool, Never>, _ makeTask: () -> Task<Void, Never>) {
+    func start(_ continuation: CheckedContinuation<Answer, Never>, _ makeTask: () -> Task<Void, Never>) {
         lock.lock()
         if let answer {
             lock.unlock()
@@ -828,7 +853,7 @@ private final class ConfirmationRace: @unchecked Sendable {
         lock.unlock()
     }
 
-    func resolve(_ value: Bool) {
+    func resolve(_ value: Answer) {
         lock.lock()
         guard answer == nil else {
             lock.unlock()

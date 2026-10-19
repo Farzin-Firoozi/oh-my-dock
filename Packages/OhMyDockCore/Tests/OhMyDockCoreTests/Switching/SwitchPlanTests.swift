@@ -146,4 +146,21 @@ struct SwitchPlanTests {
         let plan = AppSwitcher.plan(from: nil, to: target, running: [info(1, "com.agent", policy: .accessory)], neverQuit: testPolicy)
         #expect(plan.willLaunch.isEmpty)
     }
+
+    @Test func excludingMovesMatchingAppsFromQuitToKeep() {
+        let app1 = info(1, "com.example.quit1")
+        let app2 = info(2, "com.example.quit2")
+        let app3 = info(3, "com.example.keep")
+        let plan = SwitchPlan(scope: .allNotInProfile, willQuit: [app1, app2], willKeep: [app3])
+
+        let excluded = plan.excluding(bundleIDs: ["COM.EXAMPLE.QUIT1"])
+        #expect(excluded.willQuit.map(\.processIdentifier) == [2])
+        #expect(excluded.willKeep.map(\.processIdentifier) == [3, 1])
+    }
+
+    @Test func excludingEmptySetReturnsIdenticalPlan() {
+        let plan = SwitchPlan(scope: .allNotInProfile, willQuit: [info(1, "com.a")])
+        let excluded = plan.excluding(bundleIDs: [])
+        #expect(excluded == plan)
+    }
 }
