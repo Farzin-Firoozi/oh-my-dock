@@ -69,6 +69,25 @@ extension FakeApplier {
         record(trigger: trigger, source: source?.name)
         return try await apply(profile, confirm: confirm)
     }
+
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
+    ) async throws -> ApplyResult {
+        record(trigger: trigger, source: source?.name)
+        let boolConfirm: (@Sendable (ApplyPreview) async -> Bool)?
+        if let confirm {
+            boolConfirm = { (preview: ApplyPreview) async -> Bool in
+                let res = await confirm(preview)
+                return res.accepted
+            }
+        } else {
+            boolConfirm = nil
+        }
+        return try await apply(profile, confirm: boolConfirm)
+    }
 }
 
 private actor FakeUndoer: DockUndoing {

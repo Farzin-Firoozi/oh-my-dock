@@ -182,6 +182,16 @@ public final class DiffSheetViewModel {
     public let prefs: [PrefRow]
     /// "Apps" section: running apps to quit and apps to open.
     public let apps: [AppRow]
+    public let preview: ApplyPreview
+    public let switchConfirmationViewModel: SwitchConfirmationViewModel?
+
+    public var excludedBundleIDs: Set<String> {
+        switchConfirmationViewModel?.excludedBundleIDs ?? []
+    }
+
+    public var confirmResult: ApplyConfirmResult {
+        ApplyConfirmResult(accepted: true, excludedBundleIDs: excludedBundleIDs)
+    }
 
     public var hasChanges: Bool {
         !additions.isEmpty || !removals.isEmpty || !moves.isEmpty || !skipped.isEmpty
@@ -195,8 +205,20 @@ public final class DiffSheetViewModel {
     // MARK: - Initializer
 
     public init(preview: ApplyPreview) {
+        self.preview = preview
         self.profileName = preview.profileName
         self.summary = preview.plan.summary
+
+        if let plan = preview.switchPlan, (!plan.willQuit.isEmpty || !plan.willLaunch.isEmpty || !plan.willKeep.isEmpty || !plan.protected.isEmpty) {
+            self.switchConfirmationViewModel = SwitchConfirmationViewModel(
+                plan: plan,
+                profileName: preview.profileName,
+                skippedApps: preview.skipped.map { $0.app.name.isEmpty ? $0.app.bundleId : $0.app.name },
+                clearsRecentApps: preview.clearsRecentApps
+            )
+        } else {
+            self.switchConfirmationViewModel = nil
+        }
 
         var warningsAccumulator: [WarningRow] = []
 

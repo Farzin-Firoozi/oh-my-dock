@@ -57,7 +57,8 @@ enum AppEnvironment {
             gate: gate,
             activeRecord: FileActiveProfileRecord(),
             confirmationPresenter: AlertConfirmationPresenter(),
-            changes: changes
+            changes: changes,
+            appSwitcher: appSwitcher
         )
         hotkeys.attach(menuBar: menuBar)
         let settings = SettingsViewModel(

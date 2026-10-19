@@ -8,8 +8,31 @@ import SwiftUI
 /// clear destructive/default actions).
 public struct DiffSheetView: View {
     @State private var model: DiffSheetViewModel
-    private let onApply: () -> Void
+    private let onApplyResult: ((ApplyConfirmResult) -> Void)?
+    private let onApplyLegacy: (() -> Void)?
     private let onCancel: () -> Void
+
+    public init(
+        preview: ApplyPreview,
+        onApply: @escaping (ApplyConfirmResult) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        _model = State(initialValue: DiffSheetViewModel(preview: preview))
+        self.onApplyResult = onApply
+        self.onApplyLegacy = nil
+        self.onCancel = onCancel
+    }
+
+    public init(
+        model: DiffSheetViewModel,
+        onApply: @escaping (ApplyConfirmResult) -> Void,
+        onCancel: @escaping () -> Void
+    ) {
+        _model = State(initialValue: model)
+        self.onApplyResult = onApply
+        self.onApplyLegacy = nil
+        self.onCancel = onCancel
+    }
 
     public init(
         preview: ApplyPreview,
@@ -17,7 +40,8 @@ public struct DiffSheetView: View {
         onCancel: @escaping () -> Void
     ) {
         _model = State(initialValue: DiffSheetViewModel(preview: preview))
-        self.onApply = onApply
+        self.onApplyResult = nil
+        self.onApplyLegacy = onApply
         self.onCancel = onCancel
     }
 
@@ -27,7 +51,8 @@ public struct DiffSheetView: View {
         onCancel: @escaping () -> Void
     ) {
         _model = State(initialValue: model)
-        self.onApply = onApply
+        self.onApplyResult = nil
+        self.onApplyLegacy = onApply
         self.onCancel = onCancel
     }
 
@@ -164,7 +189,15 @@ public struct DiffSheetView: View {
                     }
                 }
 
-                if !model.apps.isEmpty {
+                if let switchVM = model.switchConfirmationViewModel {
+                    Section {
+                        SwitchConfirmationView(model: switchVM, showsFooterButtons: false)
+                    } header: {
+                        Label("App Switching", systemImage: "arrow.triangle.2.circlepath")
+                            .font(.caption.weight(.semibold))
+                            .foregroundStyle(.secondary)
+                    }
+                } else if !model.apps.isEmpty {
                     Section {
                         ForEach(model.apps) { row in
                             ChangeRowView(
@@ -225,7 +258,11 @@ public struct DiffSheetView: View {
             Spacer()
 
             Button("Apply Changes") {
-                onApply()
+                if let onApplyResult {
+                    onApplyResult(model.confirmResult)
+                } else {
+                    onApplyLegacy?()
+                }
             }
             .buttonStyle(.borderedProminent)
             .keyboardShortcut(.defaultAction)

@@ -57,10 +57,15 @@ struct MenuBarContentView: View {
             if let preview = sheetPreview {
                 DiffSheetView(
                     preview: preview,
-                    onApply: { model.resolveConfirmation(true) },
+                    onApply: { (result: ApplyConfirmResult) in model.resolveConfirmation(result) },
                     // Back to the confirmation card; declining happens only on the card's Cancel.
                     onCancel: { model.cancelDiffSheet() }
                 )
+            }
+        }
+        .sheet(isPresented: $model.showsOutcomeSheet) {
+            if let outcomeVM = model.outcomeViewModel {
+                SwitchOutcomeView(model: outcomeVM)
             }
         }
         .task {

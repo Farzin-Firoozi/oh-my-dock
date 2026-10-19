@@ -74,6 +74,9 @@ final class MenuBarViewModel {
     var isNamingProfile = false
     var newProfileName = ""
     var showsDiffSheet = false
+    var showsOutcomeSheet = false
+    var latestOutcome: SwitchOutcome?
+    var outcomeViewModel: SwitchOutcomeViewModel?
 
     var isBusy: Bool { activity != nil || gate.isBusy }
     /// What another window (the history window) is doing to the Dock, when this model is idle.
@@ -90,6 +93,7 @@ final class MenuBarViewModel {
     @ObservationIgnored private let gate: DockOperationGate
     @ObservationIgnored private let confirmationPresenter: (any ConfirmationPresenting)?
     @ObservationIgnored private let confirmationTimeout: Duration
+    @ObservationIgnored private let appSwitcher: (any AppSwitching)?
 
     @ObservationIgnored private let activeRecord: any ActiveProfileRecording
     @ObservationIgnored private var lastAppliedID: UUID? {
@@ -97,7 +101,7 @@ final class MenuBarViewModel {
     }
     @ObservationIgnored private var refreshGeneration = 0
     @ObservationIgnored private var operation: Task<Void, Never>?
-    @ObservationIgnored private var pendingConfirmation: CheckedContinuation<Bool, Never>?
+    @ObservationIgnored private var pendingConfirmation: CheckedContinuation<ApplyConfirmResult, Never>?
     /// Identifies the open question, so a late answer from an old alert or timeout can't resolve a newer one.
     @ObservationIgnored private var confirmationToken = 0
     @ObservationIgnored private var confirmationTimeoutTask: Task<Void, Never>?
@@ -114,11 +118,13 @@ final class MenuBarViewModel {
         activeRecord: any ActiveProfileRecording = InMemoryActiveProfileRecord(),
         confirmationPresenter: (any ConfirmationPresenting)? = nil,
         confirmationTimeout: Duration = .seconds(120),
-        changes: DockChangeSignal = DockChangeSignal()
+        changes: DockChangeSignal = DockChangeSignal(),
+        appSwitcher: (any AppSwitching)? = nil
     ) {
         self.gate = gate
         self.confirmationPresenter = confirmationPresenter
         self.confirmationTimeout = confirmationTimeout
+        self.appSwitcher = appSwitcher
         self.activeRecord = activeRecord
         lastAppliedID = activeRecord.load()
         self.library = library
@@ -226,7 +232,7 @@ final class MenuBarViewModel {
             let trigger: ApplyTrigger = source == .popover ? .user : .automatic
             let result = try await gate.run("Applying “\(profile.name)”") {
                 try await applier.apply(profile, from: previous, trigger: trigger) { [weak self] preview in
-                    guard let self else { return false }
+                    guard let self else { return .cancelled }
                     return await self.requestConfirmation(for: preview)
                 }
             }
@@ -234,9 +240,31 @@ final class MenuBarViewModel {
             case let .applied(report):
                 lastAppliedID = profile.id
                 show(.success, appliedMessage(profile.name, report: report))
+                if let outcome = report.switchOutcome {
+                    self.latestOutcome = outcome
+                    self.outcomeViewModel = SwitchOutcomeViewModel(
+                        outcome: outcome,
+                        options: profile.switching,
+                        switcher: self.appSwitcher,
+                        onDismiss: { [weak self] in self?.showsOutcomeSheet = false }
+                    )
+                    if !outcome.stragglers.isEmpty || !outcome.launchFailures.isEmpty {
+                        self.showsOutcomeSheet = true
+                    }
+                }
             case let .appsOnly(outcome):
                 lastAppliedID = profile.id
                 show(.success, "“\(profile.name)” is already on the Dock. " + appsMessage(outcome))
+                self.latestOutcome = outcome
+                self.outcomeViewModel = SwitchOutcomeViewModel(
+                    outcome: outcome,
+                    options: profile.switching,
+                    switcher: self.appSwitcher,
+                    onDismiss: { [weak self] in self?.showsOutcomeSheet = false }
+                )
+                if !outcome.stragglers.isEmpty || !outcome.launchFailures.isEmpty {
+                    self.showsOutcomeSheet = true
+                }
             case .noChanges:
                 lastAppliedID = profile.id
                 show(.success, "“\(profile.name)” is already on the Dock.")
@@ -272,9 +300,9 @@ final class MenuBarViewModel {
 
     /// The applier's `confirm` hook. Profiles that lose nothing apply without asking; otherwise the
     /// popover shows `confirmation` until `resolveConfirmation(_:)` (or a cancel) answers it.
-    private func requestConfirmation(for preview: ApplyPreview) async -> Bool {
-        guard preview.confirmationRequired else { return true }
-        resolveConfirmation(false) // at most one question at a time
+    private func requestConfirmation(for preview: ApplyPreview) async -> ApplyConfirmResult {
+        guard preview.confirmationRequired else { return .accepted }
+        resolveConfirmation(.cancelled) // at most one question at a time
         return await withTaskCancellationHandler {
             await withCheckedContinuation { continuation in
                 confirmationToken += 1
@@ -292,8 +320,8 @@ final class MenuBarViewModel {
                 // Nobody may be looking at the popover (a hotkey apply with the menu closed), so
                 // hand the question to the presenter too, and never wait forever.
                 if applySource == .hotkey {
-                    confirmationPresenter?.present(question) { [weak self] accepted in
-                        self?.resolveConfirmation(accepted, token: token)
+                    confirmationPresenter?.present(question) { [weak self] (result: ApplyConfirmResult) in
+                        self?.resolveConfirmation(result, token: token)
                     }
                 }
                 confirmationTimeoutTask = Task { [weak self, confirmationTimeout] in
@@ -303,12 +331,12 @@ final class MenuBarViewModel {
                 }
             }
         } onCancel: {
-            Task { @MainActor [weak self] in self?.resolveConfirmation(false) }
+            Task { @MainActor [weak self] in self?.resolveConfirmation(.cancelled) }
         }
     }
 
     /// Answers the open question. With a `token`, only if that question is still the open one.
-    func resolveConfirmation(_ accepted: Bool, token: Int? = nil) {
+    func resolveConfirmation(_ result: ApplyConfirmResult, token: Int? = nil) {
         if let token, token != confirmationToken { return }
         showsDiffSheet = false
         confirmationTimeoutTask?.cancel()
@@ -317,13 +345,17 @@ final class MenuBarViewModel {
         pendingConfirmation = nil
         confirmation = nil
         if continuation != nil { confirmationPresenter?.dismiss() }
-        continuation?.resume(returning: accepted)
+        continuation?.resume(returning: result)
+    }
+
+    func resolveConfirmation(_ accepted: Bool, token: Int? = nil) {
+        resolveConfirmation(ApplyConfirmResult(accepted: accepted), token: token)
     }
 
     private func expireConfirmation(token: Int) {
         guard token == confirmationToken, pendingConfirmation != nil else { return }
         confirmationTimedOut = true
-        resolveConfirmation(false, token: token)
+        resolveConfirmation(.cancelled, token: token)
     }
 
     /// Closes the diff sheet and returns to the confirmation card; the question stays open.
@@ -335,7 +367,8 @@ final class MenuBarViewModel {
     /// had already started writing.
     func cancelOperation() {
         showsDiffSheet = false
-        resolveConfirmation(false)
+        showsOutcomeSheet = false
+        resolveConfirmation(.cancelled)
         operation?.cancel()
     }
 

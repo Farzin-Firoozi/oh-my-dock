@@ -21,10 +21,20 @@ extension ProfileStore: ProfileLibrary {
 protocol ProfileApplying: Sendable {
     func apply(
         _ profile: Profile,
-        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
     ) async throws -> ApplyResult
     /// `source` is the profile being switched away from (it scopes which apps get quit);
     /// `trigger` tells a click from an automatic source such as a hotkey.
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
+    ) async throws -> ApplyResult
+    func apply(
+        _ profile: Profile,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult
     func apply(
         _ profile: Profile,
         from source: Profile?,
@@ -38,9 +48,37 @@ extension ProfileApplying {
         _ profile: Profile,
         from source: Profile?,
         trigger: ApplyTrigger,
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
+    ) async throws -> ApplyResult {
+        let boolConfirm: (@Sendable (ApplyPreview) async -> Bool)? = confirm.map { c in
+            { @Sendable (preview: ApplyPreview) async -> Bool in
+                (await c(preview)).accepted
+            }
+        }
+        return try await apply(profile, from: source, trigger: trigger, confirm: boolConfirm)
+    }
+
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
         confirm: (@Sendable (ApplyPreview) async -> Bool)?
     ) async throws -> ApplyResult {
         try await apply(profile, confirm: confirm)
+    }
+
+    func apply(
+        _ profile: Profile,
+        confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
+    ) async throws -> ApplyResult {
+        try await apply(profile, confirm: confirm.map { c in { @Sendable (preview: ApplyPreview) async -> Bool in (await c(preview)).accepted } })
+    }
+
+    func apply(
+        _ profile: Profile,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult {
+        try await apply(profile, confirm: confirm.map { c in { @Sendable (preview: ApplyPreview) async -> ApplyConfirmResult in ApplyConfirmResult(accepted: await c(preview)) } })
     }
 }
 
@@ -51,9 +89,24 @@ extension ProfileApplier: ProfileApplying {}
 @MainActor
 protocol ConfirmationPresenting: AnyObject {
     /// Shows `confirmation`; calls `answer` when the user picks. Calls after `dismiss()` are ignored.
+    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (ApplyConfirmResult) -> Void)
     func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void)
     /// Takes the alert down because the question was answered elsewhere or timed out.
     func dismiss()
+}
+
+extension ConfirmationPresenting {
+    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (ApplyConfirmResult) -> Void) {
+        present(confirmation) { accepted in
+            answer(ApplyConfirmResult(accepted: accepted))
+        }
+    }
+
+    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void) {
+        present(confirmation) { (result: ApplyConfirmResult) in
+            answer(result.accepted)
+        }
+    }
 }
 
 /// The snapshot an undo would go back to.
