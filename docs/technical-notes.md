@@ -52,6 +52,8 @@ Preferences are written via `defaults write com.apple.dock <key>` (or `CFPrefere
 - **Injection.** `ProfileApplier.init(..., prefsWriter: (any DockPrefsWriting)? = nil, appSwitcher: (any AppSwitching)? = nil)`. The defaults keep old call sites and tests unchanged: no switcher means apps are neither quit nor launched; no writer means a profile that sets preferences is refused (`prefsUnavailable`) rather than silently dropped.
 - **Restore is a true replace.** `defaults import com.apple.dock <file>` replaces the whole domain. The restored plist is then read back and must equal the snapshot, else `restoreVerificationFailed`.
 
+- **Preview guard.** While a Dock preferences preview is on the Dock (`DockOperationGate.isPreviewActive`, set by the prefs panel), menu-bar and hotkey apply, undo, and history restore/delete are refused with “Revert or keep the Dock preferences preview first.” They check on entry and again inside the gate (`requireNoPreview()`), because a preview can begin while an operation waits for its turn. A failed revert keeps the flag set.
+
 ### DockPrefsWriter (M2)
 
 - **`DockPrefsDomainIO`**: read/write/remove a single key + `synchronize()`. Live: `CFPreferencesDockPrefsDomainIO` (`com.apple.dock`). Tests: `InMemoryDockPrefsDomainIO` only; any live CFPreferences test uses a throwaway domain, never `com.apple.dock`.

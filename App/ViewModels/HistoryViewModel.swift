@@ -52,13 +52,13 @@ final class HistoryViewModel {
     }
 
     func requestRestore(_ snapshot: Snapshot) {
-        guard !isBusy else { return }
+        guard !isBusy, !previewBlocksDockChange() else { return }
         errorMessage = nil
         pendingAction = .restore(snapshot)
     }
 
     func requestDelete(_ snapshot: Snapshot) {
-        guard !isBusy else { return }
+        guard !isBusy, !previewBlocksDockChange() else { return }
         errorMessage = nil
         pendingAction = .delete(snapshot)
     }
@@ -73,6 +73,7 @@ final class HistoryViewModel {
     @discardableResult
     func confirm(_ action: PendingAction) -> Task<Void, Never>? {
         pendingAction = nil
+        guard !previewBlocksDockChange() else { return nil }
         guard !isBusy else {
             errorMessage = "Another Dock change is running. Try again when it finishes."
             return nil
@@ -94,6 +95,7 @@ final class HistoryViewModel {
     }
 
     func perform(_ action: PendingAction) async {
+        guard !previewBlocksDockChange() else { return }
         guard !isBusy else { return }
         isWorking = true
         errorMessage = nil
@@ -106,9 +108,15 @@ final class HistoryViewModel {
         do {
             switch action {
             case let .restore(snapshot):
-                try await gate.run("Restoring a snapshot") { try await history.restore(id: snapshot.id) }
+                try await gate.run("Restoring a snapshot") {
+                    try gate.requireNoPreview()
+                    try await history.restore(id: snapshot.id)
+                }
             case let .delete(snapshot):
-                try await gate.run("Deleting a snapshot") { try await history.delete(id: snapshot.id) }
+                try await gate.run("Deleting a snapshot") {
+                    try gate.requireNoPreview()
+                    try await history.delete(id: snapshot.id)
+                }
             }
             await load()
         } catch {
@@ -137,6 +145,13 @@ final class HistoryViewModel {
         } catch {
             errorMessage = describe(error)
         }
+    }
+
+    /// Restore and delete are refused while a Dock preferences preview is on the Dock.
+    private func previewBlocksDockChange() -> Bool {
+        guard gate.isPreviewActive else { return false }
+        errorMessage = DockOperationGate.previewActiveMessage
+        return true
     }
 
     private func describe(_ error: any Error) -> String {

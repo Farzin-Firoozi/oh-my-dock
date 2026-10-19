@@ -209,6 +209,28 @@ private struct Rig {
         #expect(rig.gate.isBusy == false)
     }
 
+    @Test func activePreviewIsVisibleOnTheSharedGateUntilRevertedOrKept() async {
+        let rig = Rig(prefs: .displayDefaults)
+        #expect(!rig.gate.isPreviewActive)
+        await rig.panel.preview()
+        #expect(rig.gate.isPreviewActive)
+        #expect(await rig.panel.revert())
+        #expect(!rig.gate.isPreviewActive)
+
+        await rig.panel.preview()
+        #expect(rig.gate.isPreviewActive)
+        rig.panel.keepPreview()
+        #expect(!rig.gate.isPreviewActive)
+    }
+
+    @Test func failedRevertKeepsThePreviewFlagSoApplyStaysBlocked() async {
+        let rig = Rig(prefs: .displayDefaults)
+        await rig.panel.preview()
+        await rig.previewer.configure(failRevert: true)
+        #expect(await rig.panel.revert() == false)
+        #expect(rig.gate.isPreviewActive)
+    }
+
     @Test func previewWhenDockAlreadyMatchesStartsNothing() async {
         let live = DockPrefs.displayDefaults
         let rig = Rig(prefs: live, live: live)

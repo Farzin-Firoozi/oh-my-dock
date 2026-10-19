@@ -191,6 +191,7 @@ final class MenuBarViewModel {
 
     /// Starts applying `profile`; the popover's click handler. Use `cancelOperation()` to stop it.
     func apply(_ profile: Profile) {
+        guard !previewBlocksDockChange() else { return }
         guard !isBusy else {
             show(.failure, "Another Dock change is already running. Try again when it finishes.")
             return
@@ -201,6 +202,7 @@ final class MenuBarViewModel {
     /// The hotkey entry point. Applies the latest stored version of the profile, not the copy the
     /// hotkey was registered with, and says so when it can't run.
     func applyFromHotkey(profileID: UUID) {
+        guard !previewBlocksDockChange() else { return }
         guard !isBusy else {
             show(.failure, "Another Dock change is already running. Try again when it finishes.")
             return
@@ -215,6 +217,7 @@ final class MenuBarViewModel {
     }
 
     func performApply(_ profile: Profile, source: ApplySource = .popover) async {
+        guard !previewBlocksDockChange() else { return }
         guard !isBusy else {
             if source == .hotkey { show(.failure, "Another Dock change is already running. Try again when it finishes.") }
             return
@@ -231,7 +234,8 @@ final class MenuBarViewModel {
             // A hotkey is an automatic source: it quits nothing unless the preview is confirmed.
             let trigger: ApplyTrigger = source == .popover ? .user : .automatic
             let result = try await gate.run("Applying “\(profile.name)”") {
-                try await applier.apply(profile, from: previous, trigger: trigger) { [weak self] preview in
+                try gate.requireNoPreview()
+                return try await applier.apply(profile, from: previous, trigger: trigger) { [weak self] preview in
                     guard let self else { return .cancelled }
                     return await self.requestConfirmation(for: preview)
                 }
@@ -375,18 +379,23 @@ final class MenuBarViewModel {
     // MARK: Undo
 
     func undoLastChange() {
+        guard !previewBlocksDockChange() else { return }
         guard canUndo else { return }
         operation = Task { await performUndo() }
     }
 
     func performUndo() async {
+        guard !previewBlocksDockChange() else { return }
         guard let target = undoTarget, !isBusy else { return }
         // The service resolves the real target under the gate and refuses if it isn't `target`.
         activity = .undoing
         banner = nil
         defer { activity = nil }
         do {
-            try await gate.run("Restoring the previous Dock") { try await undoer.undo(expecting: target.id) }
+            try await gate.run("Restoring the previous Dock") {
+                try gate.requireNoPreview()
+                try await undoer.undo(expecting: target.id)
+            }
             lastAppliedID = nil
             show(.success, "Restored the Dock from before the last change. Apps that were quit are not reopened.")
         } catch {
@@ -456,6 +465,13 @@ final class MenuBarViewModel {
     }
 
     // MARK: Banner
+
+    /// While a Dock preferences preview is on the Dock, applies and undo are refused with a message.
+    private func previewBlocksDockChange() -> Bool {
+        guard gate.isPreviewActive else { return false }
+        show(.failure, DockOperationGate.previewActiveMessage)
+        return true
+    }
 
     func dismissBanner() { banner = nil }
 

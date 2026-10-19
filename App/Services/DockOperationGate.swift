@@ -10,10 +10,28 @@ import Observation
 @MainActor
 @Observable
 final class DockOperationGate {
+    /// Thrown by `requireNoPreview()`; its description is the message shown to the user.
+    struct PreviewActiveError: Error, LocalizedError, Equatable {
+        var errorDescription: String? { DockOperationGate.previewActiveMessage }
+    }
+
+    nonisolated static let previewActiveMessage = "Revert or keep the Dock preferences preview first."
+
     /// Description of the operation holding the gate, e.g. "Restoring a snapshot".
     private(set) var current: String?
 
     var isBusy: Bool { current != nil }
+
+    /// True while a Dock preferences preview is on the Dock. Set by the prefs panel. Apply, undo
+    /// and history restore refuse to start meanwhile, because their pre-images and verification
+    /// would treat the previewed values as the Dock's real state and a later revert would undo them.
+    var isPreviewActive = false
+
+    /// Throws `PreviewActiveError` while a preview is active. Call at the start of an operation
+    /// and again inside `run` (a preview can begin while the operation waits for its turn).
+    func requireNoPreview() throws {
+        if isPreviewActive { throw PreviewActiveError() }
+    }
 
     @ObservationIgnored private var waiters: [CheckedContinuation<Void, Never>] = []
 

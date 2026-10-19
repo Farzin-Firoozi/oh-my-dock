@@ -176,12 +176,14 @@ final class PrefsPanelViewModel {
             let started = try await gate.run("Previewing Dock preferences") { () async throws -> PrefsPreviewSession? in
                 if let old = session {
                     try await previewer.revert(old)
-                    session = nil
+                    setSession(nil)
                     previewedProfileName = nil
                 }
-                return try await previewer.begin(target)
+                let began = try await previewer.begin(target)
+                // Set before the gate is released, so a queued apply sees the preview.
+                setSession(began)
+                return began
             }
-            session = started
             previewedProfileName = started == nil ? nil : profileName
             message = started == nil
                 ? Message(kind: .info, text: "The Dock already uses these preferences.")
@@ -200,7 +202,7 @@ final class PrefsPanelViewModel {
         defer { isWorking = false }
         do {
             try await gate.run("Reverting Dock preferences") { try await previewer.revert(active) }
-            session = nil
+            setSession(nil)
             previewedProfileName = nil
             message = Message(kind: .success, text: "Dock preferences reverted.")
             return true
@@ -212,7 +214,7 @@ final class PrefsPanelViewModel {
 
     /// Leaves the previewed values on the Dock and ends the preview.
     func keepPreview() {
-        session = nil
+        setSession(nil)
         previewedProfileName = nil
     }
 
@@ -224,6 +226,12 @@ final class PrefsPanelViewModel {
         if shouldRevert { return await revert() }
         keepPreview()
         return true
+    }
+
+    /// The one place `session` changes, so the gate's shared preview flag never drifts from it.
+    private func setSession(_ next: PrefsPreviewSession?) {
+        session = next
+        gate.isPreviewActive = next != nil
     }
 
     private static func describe(_ error: any Error) -> String {

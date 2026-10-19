@@ -147,4 +147,70 @@ private func snapshot() -> Snapshot {
         #expect(menuBar.isBusy == false)
         #expect(history.isBusy == false)
     }
+
+    // MARK: - Preview guard
+
+    @Test func applyUndoAndHotkeyAreRefusedWhileAPreviewIsActive() async {
+        let gate = DockOperationGate()
+        let probe = Probe()
+        let menuBar = MenuBarViewModel(
+            library: StaticLibrary(), dock: FakeDockBackend(),
+            applier: SlowApplier(probe: probe), undoer: SlowUndoer(probe: probe), gate: gate
+        )
+        await menuBar.refresh()
+        gate.isPreviewActive = true
+
+        menuBar.apply(Profile(name: "Work"))
+        #expect(menuBar.banner == .init(kind: .failure, message: DockOperationGate.previewActiveMessage))
+        menuBar.dismissBanner()
+        menuBar.applyFromHotkey(profileID: UUID())
+        #expect(menuBar.banner?.message == "Revert or keep the Dock preferences preview first.")
+        menuBar.dismissBanner()
+        menuBar.undoLastChange()
+        #expect(menuBar.banner?.kind == .failure)
+        menuBar.dismissBanner()
+        await menuBar.performApply(Profile(name: "Work"))
+        await menuBar.performUndo()
+
+        #expect(await probe.finished == 0)
+        #expect(menuBar.activity == nil)
+        #expect(gate.isBusy == false)
+
+        gate.isPreviewActive = false
+        await menuBar.performApply(Profile(name: "Work"))
+        #expect(await probe.finished == 1)
+    }
+
+    @Test func historyRestoreAndDeleteAreRefusedWhileAPreviewIsActive() async {
+        let gate = DockOperationGate()
+        let probe = Probe()
+        let history = HistoryViewModel(history: SlowHistory(probe: probe), gate: gate)
+        gate.isPreviewActive = true
+
+        history.requestRestore(snapshot())
+        #expect(history.pendingAction == nil)
+        #expect(history.errorMessage == DockOperationGate.previewActiveMessage)
+        history.errorMessage = nil
+        history.requestDelete(snapshot())
+        #expect(history.pendingAction == nil)
+        history.errorMessage = nil
+        await history.perform(.restore(snapshot()))
+        #expect(history.errorMessage == DockOperationGate.previewActiveMessage)
+        #expect(history.confirm(.delete(snapshot())) == nil)
+
+        #expect(await probe.finished == 0)
+        gate.isPreviewActive = false
+        history.errorMessage = nil
+        await history.perform(.restore(snapshot()))
+        #expect(history.errorMessage == nil)
+        #expect(await probe.finished == 1)
+    }
+
+    @Test func requireNoPreviewThrowsOnlyWhileAPreviewIsActive() {
+        let gate = DockOperationGate()
+        #expect(throws: Never.self) { try gate.requireNoPreview() }
+        gate.isPreviewActive = true
+        #expect(throws: DockOperationGate.PreviewActiveError()) { try gate.requireNoPreview() }
+        #expect(DockOperationGate.PreviewActiveError().errorDescription == "Revert or keep the Dock preferences preview first.")
+    }
 }
