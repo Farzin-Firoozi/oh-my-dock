@@ -16,7 +16,7 @@ struct OhMyDockApp: App {
     }
 
     var body: some Scene {
-        MenuBarExtra("oh-my-dock", systemImage: "dock.rectangle") {
+        MenuBarExtra {
             MenuBarContentView(model: shell.menuBar, updates: shell.updates)
                 .background { URLWindowObserver() }
                 .task {
@@ -28,6 +28,9 @@ struct OhMyDockApp: App {
                 .onChange(of: shell.menuBar.profiles) { _, profiles in
                     shell.hotkeys.sync(profiles: profiles)
                 }
+        } label: {
+            Image("MenuBarIcon")
+                .accessibilityLabel("oh-my-dock")
         }
         .menuBarExtraStyle(.window)
 
