@@ -247,13 +247,16 @@ final class MenuBarViewModel {
                     guard let self else { return .cancelled }
                     return await self.requestConfirmation(for: preview)
                 },
-                mutate: { answer in
+                mutate: { answer, shown in
                     try await applier.apply(
                         profile,
                         from: previous,
                         trigger: trigger,
                         controlSource: controlSource,
-                        confirm: { _ in answer }
+                        confirm: { fresh in
+                            // The lock-time preview may differ from what the user saw: never quit more.
+                            fresh.quitsAreCovered(by: shown) ? answer : .cancelled
+                        }
                     )
                 }
             )

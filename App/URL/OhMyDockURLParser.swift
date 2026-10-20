@@ -1,7 +1,7 @@
 import Foundation
 
 enum OhMyDockURLParser {
-    static let forbiddenAuthorizationKeys: Set<String> = ["allowQuit", "yes", "force", "quit"]
+    static let forbiddenAuthorizationKeys: Set<String> = ["allowquit", "allow-quit", "allow_quit", "yes", "force", "quit"]
 
     enum Route: Equatable {
         case apply(profile: String)
@@ -50,7 +50,7 @@ enum OhMyDockURLParser {
         }
 
         let query = URLQueryParsing.parsePairs(percentEncodedQuery: components.percentEncodedQuery)
-        if query.keys.contains(where: forbiddenAuthorizationKeys.contains) {
+        if query.keys.contains(where: { forbiddenAuthorizationKeys.contains($0.lowercased()) }) {
             return .failure(.forbiddenAuthorization)
         }
 

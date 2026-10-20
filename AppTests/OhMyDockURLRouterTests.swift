@@ -146,6 +146,16 @@ private func makeRouter(
         }
     }
 
+    @Test func forbiddenQuitQueryIsCaseInsensitive() {
+        for key in ["ALLOWQUIT", "allow-quit", "allow_quit", "Yes"] {
+            let url = URL(string: "ohmydock://apply?profile=Work&\(key)=1")!
+            guard case .failure(.forbiddenAuthorization) = OhMyDockURLParser.parse(url) else {
+                Issue.record("expected forbidden for \(key)")
+                return
+            }
+        }
+    }
+
     @Test func httpsSuccessCallbackRejectsURL() {
         let url = URL(string: "ohmydock://apply?profile=Work&x-success=https://evil.test/cb")!
         guard case .failure(.illegalCallback) = OhMyDockURLParser.parse(url) else {

@@ -84,6 +84,13 @@ public struct ApplyPreview: Hashable, Sendable {
     public var hasDockChanges: Bool { !plan.isEmpty || hasPrefsChanges }
     /// Running apps the switch would ask to quit.
     public var willQuitApps: [RunningAppInfo] { switchPlan?.willQuit ?? [] }
+    /// Whether every app this preview would quit or leave out was also in `shown`: a user's yes to `shown` covers it.
+    public func quitsAreCovered(by shown: ApplyPreview) -> Bool {
+        func keys(_ preview: ApplyPreview) -> Set<String> {
+            Set(preview.willQuitApps.map { $0.bundleId ?? $0.name })
+        }
+        return keys(self).isSubset(of: keys(shown)) && Set(skipped).isSubset(of: Set(shown.skipped))
+    }
     /// Nothing to write, quit or launch.
     public var isNoOp: Bool { !hasDockChanges && (switchPlan?.isEmpty ?? true) }
 

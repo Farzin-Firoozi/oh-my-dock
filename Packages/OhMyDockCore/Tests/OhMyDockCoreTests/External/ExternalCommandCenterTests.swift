@@ -52,6 +52,37 @@ import Testing
         }
     }
 
+    @Test func undoAndRestoreErrorsKeepTheirExitCodes() async throws {
+        try await ExternalTestSupport.withSupportRoot { _ in
+            let center = try ExternalTestSupport.makeCenter()
+            let undo = await center.run(ExternalRequest(command: .undo, source: .cli))
+            #expect(undo.exitCode == 3)
+            let restore = await center.run(ExternalRequest(command: .restore(id: UUID()), source: .cli, yes: true))
+            #expect(restore.exitCode == 3)
+        }
+    }
+
+    @Test func quitsAreCoveredOnlyBySupersetPreview() {
+        func preview(_ ids: [String]) -> ApplyPreview {
+            ApplyPreview(
+                profileName: "P", current: DockState(), target: DockState(),
+                plan: DockPlan(operations: [], summary: ""), skipped: [],
+                switchPlan: SwitchPlan(scope: .none, willQuit: ids.enumerated().map {
+                    RunningAppInfo(processIdentifier: Int32($0.offset), bundleId: $0.element, name: $0.element, activationPolicy: .regular, isFinishedLaunching: true)
+                }, willLaunch: [])
+            )
+        }
+        #expect(preview(["a"]).quitsAreCovered(by: preview(["a", "b"])))
+        #expect(!preview(["a", "b"]).quitsAreCovered(by: preview(["a"])))
+        let missing = SkippedItem(section: .apps, index: 0, app: AppRef(bundleId: "gone", name: "Gone", path: "/Applications/Gone.app", launchOnSwitch: false))
+        let withSkipped = ApplyPreview(
+            profileName: "P", current: DockState(), target: DockState(),
+            plan: DockPlan(operations: [], summary: ""), skipped: [missing]
+        )
+        #expect(!withSkipped.quitsAreCovered(by: preview([])))
+        #expect(withSkipped.quitsAreCovered(by: withSkipped))
+    }
+
     @Test func quitRequiresBothFlags() async throws {
         try await ExternalTestSupport.withSupportRoot { _ in
             let dock = FakeDockBackend()

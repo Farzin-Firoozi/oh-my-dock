@@ -429,7 +429,10 @@ struct Completions: AsyncParsableCommand {
     }
 
     private func fishProfileSuffix(_ names: [String]) -> String {
-        let list = names.joined(separator: " ")
-        return "complete -c ohmydock -n '__fish_use_subcommand' -a '\(list)' -d 'Profile'\n"
+        func fishQuote(_ text: String) -> String {
+            "'" + text.replacingOccurrences(of: "\\", with: "\\\\").replacingOccurrences(of: "'", with: "\\'") + "'"
+        }
+        let list = fishQuote(names.map(fishQuote).joined(separator: " "))
+        return "complete -c ohmydock -n '__fish_use_subcommand' -a \(list) -d 'Profile'\n"
     }
 }

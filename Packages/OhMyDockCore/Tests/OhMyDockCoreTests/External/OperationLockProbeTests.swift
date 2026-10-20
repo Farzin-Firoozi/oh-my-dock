@@ -18,6 +18,19 @@ import Testing
         }
     }
 
+    @Test func inProcessPreviewHolderIsNotDroppedByMutationLocks() async throws {
+        try await ExternalTestSupport.withSupportRoot { root in
+            let locks = try OperationLock(supportRoot: root)
+            try await locks.withExclusivePreview {
+                await #expect(throws: OperationLockError.busy(reason: .previewActive)) {
+                    try await locks.withMutationLocks(timeout: .zero) {}
+                }
+                #expect(locks.isPreviewHeld())
+            }
+            #expect(!locks.isPreviewHeld())
+        }
+    }
+
     @Test func sharedLockProbeDoesNotReleaseSharedHold() async throws {
         try await ExternalTestSupport.withSupportRoot { root in
         let locks = try OperationLock(supportRoot: root)

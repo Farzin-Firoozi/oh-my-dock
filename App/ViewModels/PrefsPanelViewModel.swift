@@ -219,6 +219,7 @@ final class PrefsPanelViewModel: PreviewReverting {
                 ? Message(kind: .info, text: "The Dock already uses these preferences.")
                 : nil
         } catch OperationLockError.busy {
+            endPreviewFileLockIfNeeded()
             message = Message(kind: .error, text: DockOperationGate.previewActiveMessage)
         } catch {
             endPreviewFileLockIfNeeded()

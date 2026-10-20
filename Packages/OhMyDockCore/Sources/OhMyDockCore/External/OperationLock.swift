@@ -65,9 +65,7 @@ public final class OperationLock: @unchecked Sendable {
     public func withExclusivePreview<T>(
         _ body: @Sendable () async throws -> T
     ) async throws -> T {
-        let fd = try openPersistentPreview()
-        try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: .zero, reason: .previewActive)
-        markPreviewExclusiveHeld(true)
+        _ = try takePreview()
         defer { releasePreview() }
         return try await body()
     }
@@ -77,11 +75,7 @@ public final class OperationLock: @unchecked Sendable {
         timeout: Duration,
         _ body: @Sendable () async throws -> T
     ) async throws -> T {
-        let previewFD = try openPersistentPreview()
-        guard tryAcquire(fd: previewFD, type: Int16(F_WRLCK), wait: false) else {
-            throw OperationLockError.busy(reason: .previewActive)
-        }
-        markPreviewExclusiveHeld(true)
+        let previewFD = try takePreview()
         let operationFD = try openPersistentOperation()
         do {
             try await acquire(fd: operationFD, type: Int16(F_WRLCK), timeout: timeout, reason: .operationLock)
@@ -156,11 +150,7 @@ public final class OperationLock: @unchecked Sendable {
         timeout: Duration,
         _ body: @MainActor () async throws -> T
     ) async throws -> T {
-        let previewFD = try openPersistentPreview()
-        guard tryAcquire(fd: previewFD, type: Int16(F_WRLCK), wait: false) else {
-            throw OperationLockError.busy(reason: .previewActive)
-        }
-        markPreviewExclusiveHeld(true)
+        let previewFD = try takePreview()
         let operationFD = try openPersistentOperation()
         do {
             try await acquire(fd: operationFD, type: Int16(F_WRLCK), timeout: timeout, reason: .operationLock)
@@ -184,9 +174,7 @@ public final class OperationLock: @unchecked Sendable {
     public func withExclusivePreviewUI<T>(
         _ body: @MainActor () async throws -> T
     ) async throws -> T {
-        let fd = try openPersistentPreview()
-        try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: .zero, reason: .previewActive)
-        markPreviewExclusiveHeld(true)
+        _ = try takePreview()
         defer { releasePreview() }
         return try await body()
     }
@@ -194,9 +182,7 @@ public final class OperationLock: @unchecked Sendable {
     /// Holds `preview.lock` until `releaseExclusivePreviewSession()` (prefs preview in the app).
     @MainActor
     public func acquireExclusivePreviewSession() async throws {
-        let fd = try openPersistentPreview()
-        try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: .zero, reason: .previewActive)
-        markPreviewExclusiveHeld(true)
+        _ = try takePreview()
     }
 
     @MainActor
@@ -230,6 +216,19 @@ public final class OperationLock: @unchecked Sendable {
             operationFD = fd
             return fd
         }
+    }
+
+    /// fcntl locks never conflict within one process, so an in-process holder is tracked by the flag.
+    /// Only the call that takes the lock may unlock it and clear the flag.
+    private func takePreview() throws -> Int32 {
+        let fd = try openPersistentPreview()
+        try lock.withLock {
+            if previewExclusiveHeld || !tryAcquire(fd: fd, type: Int16(F_WRLCK), wait: false) {
+                throw OperationLockError.busy(reason: .previewActive)
+            }
+            previewExclusiveHeld = true
+        }
+        return fd
     }
 
     private func openPersistentPreview() throws -> Int32 {

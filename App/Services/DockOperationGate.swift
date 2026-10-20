@@ -83,7 +83,7 @@ final class DockOperationGate {
         _ label: String,
         preview: @MainActor () async throws -> ApplyPreview,
         confirm: @MainActor (ApplyPreview) async -> ApplyConfirmResult,
-        mutate: @MainActor (ApplyConfirmResult) async throws -> T
+        mutate: @MainActor (ApplyConfirmResult, ApplyPreview) async throws -> T
     ) async throws -> T {
         await acquire(label)
         defer { release() }
@@ -92,9 +92,12 @@ final class DockOperationGate {
         guard answer.accepted else {
             throw ConfirmationDeclined()
         }
+        guard !isPreviewActive else {
+            throw PreviewActiveError()
+        }
         do {
             return try await fileLocks.withMutationLocksUI(timeout: .seconds(180)) {
-                try await mutate(answer)
+                try await mutate(answer, previewValue)
             }
         } catch OperationLockError.busy(let reason) {
             throw reason == .previewActive ? PreviewActiveError() : BusyError()

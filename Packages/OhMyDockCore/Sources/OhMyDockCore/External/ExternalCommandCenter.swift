@@ -145,7 +145,7 @@ public struct ExternalCommandCenter: Sendable {
         } catch OperationLockError.busy(let reason) {
             return locked(name, reason: reason)
         } catch {
-            return internalFailure(name, error)
+            return mapError(error, name: name)
         }
     }
 
@@ -162,7 +162,7 @@ public struct ExternalCommandCenter: Sendable {
         } catch OperationLockError.busy(let reason) {
             return locked(name, reason: reason)
         } catch {
-            return internalFailure(name, error)
+            return mapError(error, name: name)
         }
     }
 
@@ -176,6 +176,22 @@ public struct ExternalCommandCenter: Sendable {
         } catch OperationLockError.busy(let reason) {
             return locked(name, reason: reason)
         } catch {
+            return mapError(error, name: name)
+        }
+    }
+
+    /// Errors thrown by a locked body: undo/restore/snapshot/apply failures keep their own exit codes.
+    private func mapError(_ error: any Error, name: String) -> ExternalResult {
+        switch error {
+        case UndoError.nothingToUndo:
+            return failure(name, code: "nothingToUndo", exit: 3, message: "There is nothing to undo.")
+        case UndoError.targetChanged:
+            return failure(name, code: "conflict", exit: 6, message: String(describing: error), reason: "targetChanged")
+        case SnapshotStoreError.snapshotNotFound:
+            return failure(name, code: "notFound", exit: 3, message: "Snapshot not found.")
+        case let error as ApplyError:
+            return mapApplyError(error, name: name, preview: nil)
+        default:
             return internalFailure(name, error)
         }
     }
@@ -324,16 +340,10 @@ public struct ExternalCommandCenter: Sendable {
                 copy.switching.quitScope = quitScope
                 return copy
             }()
-            let all = await sortedProfiles()
-            let currentDock = try? await dock.read()
-            let lastApplied = activeRecord.load()
-            let match = currentDock.map {
-                ActiveProfileMatcher.match(profiles: all, current: $0, lastAppliedID: lastApplied)
-            }
-            let previous = match?.primary.flatMap { p in p.id != profile.id ? p : nil }
+            let previewPrevious = await previousProfile(for: profile)
 
             do {
-                let preview = try await applier.preview(profile, from: previous, trigger: .user)
+                let preview = try await applier.preview(profile, from: previewPrevious, trigger: .user)
                 if dryRun {
                     return try await locks.withSharedOperation(timeout: timeout) {
                         applyPreviewPayload(name: name, profile: profile, preview: preview, status: "dryRun")
@@ -353,9 +363,28 @@ public struct ExternalCommandCenter: Sendable {
                     lockedAnswer = nil
                 }
                 return try await locks.withMutationLocks(timeout: timeout) {
-                    let confirm = lockedAnswer.map { answer in
-                        { @Sendable (_: ApplyPreview) async -> ApplyConfirmResult in answer }
-                    } ?? cliConfirmClosure(request: request, keepRunning: keepRunning)
+                    // The Dock may have changed since the preview: re-derive `previous` and re-check
+                    // the quit/skip rules against the preview the applier builds under the locks.
+                    let previous = await previousProfile(for: profile)
+                    let refused = RefusedPreview()
+                    let excluded = Set(keepRunning.map { $0.lowercased() })
+                    let confirm: @Sendable (ApplyPreview) async -> ApplyConfirmResult = { fresh in
+                        if let lockedAnswer {
+                            guard fresh.quitsAreCovered(by: preview) else {
+                                refused.set(fresh)
+                                return .cancelled
+                            }
+                            return lockedAnswer
+                        }
+                        let needsQuit = !fresh.willQuitApps.isEmpty
+                        if (needsQuit && !(request.allowQuit && request.yes))
+                            || (!fresh.skipped.isEmpty && !request.yes)
+                        {
+                            refused.set(fresh)
+                            return .cancelled
+                        }
+                        return ApplyConfirmResult(accepted: true, excludedBundleIDs: excluded)
+                    }
                     let result = try await applier.apply(
                         profile,
                         from: previous,
@@ -363,6 +392,9 @@ public struct ExternalCommandCenter: Sendable {
                         controlSource: request.source,
                         confirm: confirm
                     )
+                    if let fresh = refused.get() {
+                        return needsConfirmation(name, preview: fresh, reason: fresh.willQuitApps.isEmpty ? "skip" : "quit")
+                    }
                     activeRecord.save(profile.id)
                     return mapApplyResult(result, profile: profile, preview: preview, name: name)
                 }
@@ -396,13 +428,19 @@ public struct ExternalCommandCenter: Sendable {
         return nil
     }
 
-    private func cliConfirmClosure(
-        request: ExternalRequest,
-        keepRunning: [String]
-    ) -> (@Sendable (ApplyPreview) async -> ApplyConfirmResult)? {
-        if let confirm = request.confirm { return confirm }
-        let excluded = Set(keepRunning.map { $0.lowercased() })
-        return { _ in ApplyConfirmResult(accepted: true, excludedBundleIDs: excluded) }
+    /// Set by the locked confirm closure when the fresh preview breaks the quit/skip rules.
+    private final class RefusedPreview: @unchecked Sendable {
+        private let lock = NSLock()
+        private var preview: ApplyPreview?
+        func set(_ value: ApplyPreview) { lock.withLock { preview = value } }
+        func get() -> ApplyPreview? { lock.withLock { preview } }
+    }
+
+    private func previousProfile(for profile: Profile) async -> Profile? {
+        let all = await sortedProfiles()
+        guard let currentDock = try? await dock.read() else { return nil }
+        let match = ActiveProfileMatcher.match(profiles: all, current: currentDock, lastAppliedID: activeRecord.load())
+        return match.primary.flatMap { $0.id != profile.id ? $0 : nil }
     }
 
     private func mapApplyResult(
@@ -581,19 +619,13 @@ public struct ExternalCommandCenter: Sendable {
     }
 
     private func undoChange(request: ExternalRequest, timeout: Duration, name: String) async -> ExternalResult {
-        do {
-            return try await withMutation(timeout: timeout, name: name) {
-                let id = try await undo.undo(expecting: nil, controlSource: request.source)
-                var payload = ExternalPayload()
-                payload.snapshotID = id.uuidString
-                payload.restarted = true
-                payload.source = request.source.rawValue
-                return success(name, message: "Undo complete.", payload: payload)
-            }
-        } catch UndoError.nothingToUndo {
-            return failure(name, code: "nothingToUndo", exit: 3, message: "There is nothing to undo.")
-        } catch {
-            return internalFailure(name, error)
+        await withMutation(timeout: timeout, name: name) {
+            let id = try await undo.undo(expecting: nil, controlSource: request.source)
+            var payload = ExternalPayload()
+            payload.snapshotID = id.uuidString
+            payload.restarted = true
+            payload.source = request.source.rawValue
+            return success(name, message: "Undo complete.", payload: payload)
         }
     }
 
@@ -625,15 +657,9 @@ public struct ExternalCommandCenter: Sendable {
         guard request.yes else {
             return failure(name, code: "usage", exit: 2, message: "snapshots delete requires --yes.")
         }
-        do {
-            return try await withExclusive(timeout: timeout, refusePreview: true, name: name) {
-                try await snapshots.delete(id: id)
-                return success(name, message: "Snapshot deleted.", payload: nil)
-            }
-        } catch SnapshotStoreError.snapshotNotFound {
-            return failure(name, code: "notFound", exit: 3, message: "Snapshot not found.")
-        } catch {
-            return internalFailure(name, error)
+        return await withExclusive(timeout: timeout, refusePreview: true, name: name) {
+            try await snapshots.delete(id: id)
+            return success(name, message: "Snapshot deleted.", payload: nil)
         }
     }
 
@@ -641,19 +667,13 @@ public struct ExternalCommandCenter: Sendable {
         guard request.yes else {
             return failure(name, code: "usage", exit: 2, message: "restore requires --yes.")
         }
-        do {
-            return try await withMutation(timeout: timeout, name: name) {
-                try await restorer.restore(id: id, source: request.source)
-                var payload = ExternalPayload()
-                payload.snapshotID = id.uuidString
-                payload.restarted = true
-                payload.source = request.source.rawValue
-                return success(name, message: "Snapshot restored.", payload: payload)
-            }
-        } catch SnapshotStoreError.snapshotNotFound {
-            return failure(name, code: "notFound", exit: 3, message: "Snapshot not found.")
-        } catch {
-            return internalFailure(name, error)
+        return await withMutation(timeout: timeout, name: name) {
+            try await restorer.restore(id: id, source: request.source)
+            var payload = ExternalPayload()
+            payload.snapshotID = id.uuidString
+            payload.restarted = true
+            payload.source = request.source.rawValue
+            return success(name, message: "Snapshot restored.", payload: payload)
         }
     }
 
@@ -701,7 +721,9 @@ public struct ExternalCommandCenter: Sendable {
         timeout: Duration,
         name: String
     ) async -> ExternalResult {
-        await withExclusive(timeout: timeout, refusePreview: true, name: name) {
+        // Read and sanitize before taking operation.lock: stdin may block indefinitely.
+        let sanitized: SanitizedProfile
+        do {
             let data: Data
             switch source {
             case let .file(url):
@@ -712,11 +734,16 @@ public struct ExternalCommandCenter: Sendable {
             case .stdin:
                 data = try Data(FileHandle.standardInput.readToEnd() ?? Data())
             }
-            let sanitized = try ProfileExchange.importProfile(from: data)
-            var profile = sanitized.profile
-            if let overrideName {
-                profile.name = overrideName
-            }
+            sanitized = try ProfileExchange.importProfile(from: data)
+        } catch {
+            return internalFailure(name, error)
+        }
+        let profile: Profile = {
+            var imported = sanitized.profile
+            if let overrideName { imported.name = overrideName }
+            return imported
+        }()
+        return await withExclusive(timeout: timeout, refusePreview: true, name: name) {
             let listed = await profiles.list()
             if listed.profiles.contains(where: { $0.name.localizedCaseInsensitiveCompare(profile.name) == .orderedSame }) {
                 return failure(name, code: "conflict", exit: 6, message: "Name already in use.", reason: "nameInUse")

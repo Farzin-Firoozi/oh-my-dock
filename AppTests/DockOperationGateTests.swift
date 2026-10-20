@@ -288,7 +288,7 @@ private actor AsyncGate {
                     await releaseConfirm.wait()
                     return .accepted
                 },
-                mutate: { _ in true }
+                mutate: { _, _ in true }
             )
         }
         try await Task.sleep(for: .milliseconds(50))
