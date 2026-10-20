@@ -104,6 +104,14 @@ private struct Rig {
 
 @MainActor
 @Suite(.serialized) struct PrefsPanelViewModelTests {
+    @Test func activePreviewHoldsPreviewFileLockUntilRevert() async {
+        let rig = Rig(prefs: DockPrefs(tileSize: 40))
+        await rig.panel.preview()
+        #expect(rig.gate.fileLocks.isPreviewHeld())
+        _ = await rig.panel.revert()
+        #expect(!rig.gate.fileLocks.isPreviewHeld())
+    }
+
     @Test func togglingOnSeedsFromDockAndOffSetsNil() {
         let rig = Rig()
         rig.panel.setManaged(true)

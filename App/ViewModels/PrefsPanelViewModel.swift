@@ -84,6 +84,7 @@ final class PrefsPanelViewModel: PreviewReverting {
     let gate: DockOperationGate
     @ObservationIgnored private var profileName: String?
     @ObservationIgnored private var idleWaiters: [CheckedContinuation<Void, Never>] = []
+    @ObservationIgnored private var previewFileLockHeld = false
 
     /// `persist` writes the profile's preferences through the editor and returns false if it refused.
     init(
@@ -183,6 +184,10 @@ final class PrefsPanelViewModel: PreviewReverting {
         defer { endWork() }
         message = nil
         do {
+            if !previewFileLockHeld {
+                try await gate.acquirePreviewFileLock()
+                previewFileLockHeld = true
+            }
             gate.isPreviewActive = true
             let started = try await gate.run("Previewing Dock preferences") { () async throws -> PrefsPreviewSession? in
                 if let old = session {
@@ -204,12 +209,19 @@ final class PrefsPanelViewModel: PreviewReverting {
                 setMayHavePreviewedValues(false)
                 return began
             }
-            gate.isPreviewActive = started != nil
+            if started == nil {
+                endPreviewFileLockIfNeeded()
+            } else {
+                gate.isPreviewActive = true
+            }
             previewedProfileName = started == nil ? nil : profileName
             message = started == nil
                 ? Message(kind: .info, text: "The Dock already uses these preferences.")
                 : nil
+        } catch OperationLockError.busy {
+            message = Message(kind: .error, text: DockOperationGate.previewActiveMessage)
         } catch {
+            endPreviewFileLockIfNeeded()
             message = Message(kind: .error, text: Self.describe(error))
         }
     }
@@ -231,7 +243,7 @@ final class PrefsPanelViewModel: PreviewReverting {
             try await gate.run("Reverting Dock preferences") { try await previewer.revert(active) }
             setSession(nil)
             previewedProfileName = nil
-            gate.isPreviewActive = false
+            endPreviewFileLockIfNeeded()
             message = Message(kind: .success, text: "Dock preferences reverted.")
             return true
         } catch {
@@ -245,6 +257,7 @@ final class PrefsPanelViewModel: PreviewReverting {
         setSession(nil)
         setMayHavePreviewedValues(false)
         previewedProfileName = nil
+        endPreviewFileLockIfNeeded()
     }
 
     /// The editor is closing or the user is leaving the panel with a preview active: revert it
@@ -260,11 +273,18 @@ final class PrefsPanelViewModel: PreviewReverting {
     /// Where `session` changes, so the gate's shared preview flag never drifts from it.
     private func setSession(_ next: PrefsPreviewSession?) {
         session = next
-        gate.isPreviewActive = isPreviewing
+        gate.isPreviewActive = isPreviewing || previewFileLockHeld
     }
 
     private func setMayHavePreviewedValues(_ next: Bool) {
         mayHavePreviewedValues = next
+        gate.isPreviewActive = isPreviewing || previewFileLockHeld
+    }
+
+    private func endPreviewFileLockIfNeeded() {
+        guard previewFileLockHeld else { return }
+        gate.releasePreviewFileLock()
+        previewFileLockHeld = false
         gate.isPreviewActive = isPreviewing
     }
 

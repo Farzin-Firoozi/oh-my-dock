@@ -118,6 +118,25 @@ public final class OperationLock: @unchecked Sendable {
         return try await body()
     }
 
+    @MainActor
+    public func withExclusiveOperationUI<T>(
+        timeout: Duration,
+        refuseWhenPreviewHeld: Bool = true,
+        _ body: @MainActor () async throws -> T
+    ) async throws -> T {
+        if refuseWhenPreviewHeld, isPreviewHeld() {
+            throw OperationLockError.busy(reason: .previewActive)
+        }
+        let fd = try openPersistentOperation()
+        try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: timeout, reason: .operationLock)
+        markOperationExclusiveHeld(true)
+        defer {
+            markOperationExclusiveHeld(false)
+            unlock(fd: fd)
+        }
+        return try await body()
+    }
+
     public func withSharedOperation<T>(
         timeout: Duration,
         _ body: @Sendable () async throws -> T
@@ -170,6 +189,19 @@ public final class OperationLock: @unchecked Sendable {
         markPreviewExclusiveHeld(true)
         defer { releasePreview() }
         return try await body()
+    }
+
+    /// Holds `preview.lock` until `releaseExclusivePreviewSession()` (prefs preview in the app).
+    @MainActor
+    public func acquireExclusivePreviewSession() async throws {
+        let fd = try openPersistentPreview()
+        try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: .zero, reason: .previewActive)
+        markPreviewExclusiveHeld(true)
+    }
+
+    @MainActor
+    public func releaseExclusivePreviewSession() {
+        releasePreview()
     }
 
     // MARK: - File descriptors
@@ -289,7 +321,7 @@ public enum LockTimeout {
 
     public static func resolve(requestTimeout: Duration?) -> Duration {
         if let requestTimeout { return requestTimeout }
-        if let raw = ProcessInfo.processInfo.environment[environmentKey],
+        if let raw = OhMyDockProcessEnvironment.string(for: environmentKey),
            let seconds = Int(raw),
            seconds >= 0
         {
