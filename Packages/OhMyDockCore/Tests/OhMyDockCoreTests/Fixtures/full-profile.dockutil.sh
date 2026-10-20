@@ -1,6 +1,6 @@
 #!/bin/sh
 # oh-my-dock profile: 'Work'
-# generator: oh-my-dock 0.0.1
+# generator: oh-my-dock 0.2.0
 set -eu
 if ! command -v dockutil >/dev/null 2>&1; then
   printf '%s\n' 'dockutil is required. Install it with: brew install dockutil' >&2
