@@ -19,6 +19,7 @@ enum AppEnvironment {
         /// Reverts an active preview before the app quits; the editor's panel registers with it.
         let previewQuit: PreviewQuitCoordinator
         let urlRouter: OhMyDockURLRouter
+        let intentDependencies: IntentDependencies
     }
 
     /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
@@ -68,6 +69,7 @@ enum AppEnvironment {
             appSwitcher: appSwitcher
         )
         hotkeys.attach(menuBar: menuBar)
+
         let commandCenter = ExternalCommandCenter(
             profiles: profiles,
             snapshots: snapshots,
@@ -92,6 +94,22 @@ enum AppEnvironment {
                 return listed.profiles.contains { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
             }
         )
+        let intentConfirmation = IntentApplyConfirmationService(presenter: confirmationPresenter)
+        let intentDependencies = IntentDependencies(
+            commandCenter: commandCenter,
+            gate: gate,
+            confirm: intentConfirmation,
+            profileNameExists: { name in
+                let listed = await profiles.list()
+                return listed.profiles.contains { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+            },
+            fetchProfiles: {
+                let listed = await profiles.list()
+                return listed.profiles
+            }
+        )
+        IntentDependencies.shared = intentDependencies
+
         let watcher = StoreChangeWatcher {
             changes.notify()
             Task { await menuBar.refresh() }
@@ -122,7 +140,8 @@ enum AppEnvironment {
             gate: gate,
             prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter),
             previewQuit: PreviewQuitCoordinator(),
-            urlRouter: urlRouter
+            urlRouter: urlRouter,
+            intentDependencies: intentDependencies
         )
     }
 

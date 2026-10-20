@@ -170,6 +170,7 @@ targets:
       - path: App/Updates
       - path: App/Sheets
       - path: App/URL
+      - path: App/Intents
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore
