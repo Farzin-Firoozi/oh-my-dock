@@ -115,15 +115,15 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 
 Groups run in order. Tasks in one group can run in parallel in separate worktrees; their files do not overlap. Acceptance and tests below are the dispatch contract; the design doc is the behavior contract.
 
-| # | Task | Model | Group | Depends |
-|---|---|---|---|---|
-| 5.A | Core `ExternalCommand` layer, `fcntl` locks, snapshot `source` tag, app gate/watcher | composer-2.5 | A | — |
-| 5.B | `ohmydock://` URL scheme, consent setting, x-callback-url | composer-2.5 | B | 5.A |
-| 5.C | `ohmydock` CLI (swift-argument-parser), headless, embedded in the app | composer-2.5 | B | 5.A |
-| 5.D | App Intents: apply, save, list, undo | composer-2.5 | C | 5.A, 5.B |
-| 5.E | Packaging: sign, verify-release, cask `binary` / man page, completions | composer-2.5 | C | 5.C |
-| 5.F | Docs: `docs/agents.md` and the pointers the design lists | composer-2.5 | D | 5.A–5.E |
-| 5.R | Review all of 5.A–5.F and run `make test`, `make build`, `verify-release` | grok-4.7 | E | 5.A–5.F |
+| # | Task | Model | Group | Depends | Status |
+|---|---|---|---|---|---|
+| 5.A | Core `ExternalCommand` layer, `fcntl` locks, snapshot `source` tag, app gate/watcher | composer-2.5 | A | — | **Done** — known gaps for 5.R: editor conflict banner not implemented; prefs preview may hold only in-memory flag (not `preview.lock` for whole session); `DockOperationGate.runExclusiveMutation` may hold file lock across confirmation UI; some `doctor`/`status`/`export` JSON thinner than design §3; `show` JSON uses `profileDocument` (base64) not `result.profile`; no dedicated `StoreChangeWatcher` unit test |
+| 5.B | `ohmydock://` URL scheme, consent setting, x-callback-url | composer-2.5 | B | 5.A | **Done** |
+| 5.C | `ohmydock` CLI (swift-argument-parser), headless, embedded in the app | composer-2.5 | B | 5.A | **Done** |
+| 5.D | App Intents: apply, save, list, undo | composer-2.5 | C | 5.A, 5.B | **Done** |
+| 5.E | Packaging: sign, verify-release, cask `binary` / man page, completions | composer-2.5 | C | 5.C | **Done** |
+| 5.F | Docs: `docs/agents.md` and the pointers the design lists | composer-2.5 | D | 5.A–5.E | **Done** |
+| 5.R | Review all of 5.A–5.F and run `make test`, `make build`, `verify-release` | grok-4.7 | E | 5.A–5.F | Pending |
 
 ### 5.A — Command center, locks, source
 

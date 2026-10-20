@@ -117,6 +117,10 @@ Tests syntax-check generated scripts with `sh -n` on stdin. They do not execute 
 - Optional iCloud sync for profiles only.
 - No analytics. Network use is limited to update checks.
 
+## External control (v0.3)
+
+CLI, URL handler, and App Intents are thin shells over `OhMyDockCore/External/` (`ExternalCommandCenter`, advisory `operation.lock` / `preview.lock` in the support directory). The CLI applies headless and does not hand off to the app. Spec: [external-control-design.md](external-control-design.md). Agent-facing commands and exit codes: [agents.md](agents.md).
+
 ## Decisions
 
 - **Quit permission**: none needed in the tested scope. `NSRunningApplication.terminate()` works with no Accessibility or Automation permission on macOS 27.0.1, unmanaged machine (CLI, ad-hoc app, and ad-hoc hardened-runtime app tested). Untested: macOS 14/15, notarized Developer ID build, MDM/PPPC Macs, save sheets / quit veto, sandboxed targets, `forceTerminate()`. Always handle `terminate() == false` and timeouts; never force quit automatically. No first-use prompt. Do **not** add `NSAppleEventsUsageDescription` or the apple-events entitlement, and never hand-build quit Apple Events / AppleScript (those need Automation consent). See [spike 0.6](spikes/0.6-terminate-permission.md).

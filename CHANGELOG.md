@@ -1,5 +1,13 @@
 # Changelog
 
+## Unreleased
+
+- **`ohmydock` CLI**: headless control of profiles and the Dock (`list`, `show`, `current`, `apply`, `save`, `delete`, `rename`, `duplicate`, `undo`, snapshots/history, `restore`, `export`, `import`, `status`, `doctor`, `version`, shell `completions`). JSON envelope (`schemaVersion` 1), documented exit codes, `--dry-run` apply, quit flags requiring explicit `--allow-quit` and `--yes`.
+- **URL scheme** `ohmydock://` for apply, save, undo, and open (editor/history/settings); optional x-callback-url; first-use **Allow external control** consent for mutating URLs.
+- **App Intents / Shortcuts**: apply profile, save current Dock, list profiles, undo last change.
+- **Settings**: external control mode (ask / allowed / denied) for URL automation.
+- **Man page** `ohmydock.1` shipped in the app bundle; Homebrew cask exposes the CLI via a `binary` stanza to `OhMyDock.app/Contents/Helpers/ohmydock`.
+
 ## 0.2.0
 
 - Dock preferences panel: size, magnification, position, auto-hide, minimize effect and more, with a live preview, Revert, and Reset to system default. Preferences are saved per profile and applied with the profile.

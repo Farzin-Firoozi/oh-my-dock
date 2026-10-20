@@ -47,14 +47,20 @@ Wraps `defaults write com.apple.dock …`:
 
 ## 4. Automation & triggers
 
+**Shipped (v0.3 external control)**
+
+- **CLI** (`ohmydock`): list/show/current/apply/save/import/export/undo/snapshots/status/doctor — headless, JSON envelope. See [agents.md](agents.md).
+- **URL scheme** `ohmydock://apply|save|undo|open` (mutating URLs need in-app confirmation; `import?url=` reserved, not implemented).
+- **Apple Shortcuts / App Intents**: Apply profile, Save current Dock, List profiles, Undo last change.
+- **Allow external control** setting (URLs only): ask / allowed / denied.
+
+**Postponed (not in v0.3)**
+
 - **Focus mode → profile** (Focus Filter).
 - **Display configuration change → profile** (external monitor connected / disconnected).
 - **Wi-Fi network → profile** (home / office).
 - **Time of day / schedule → profile**.
 - **Frontmost app → profile** (e.g. Xcode active → Dev Dock). Throttled, because each switch restarts the Dock.
-- **Apple Shortcuts** actions via App Intents: "Apply Dock profile", "Save current Dock as profile".
-- **CLI**: `ohmydock apply work`, `ohmydock list`, `ohmydock save <name>`.
-- **URL scheme**: `ohmydock://apply?profile=work`.
 
 ## 5. Smart features
 

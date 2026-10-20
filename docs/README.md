@@ -18,6 +18,8 @@ oh-my-dock **only modifies Apple's real Dock**. It does not draw its own dock, r
 | [roadmap.md](roadmap.md) | MVP and later phases |
 | [implementation-plan.md](implementation-plan.md) | Architecture, data model, milestones M0–M4, testing, release, risks |
 | [execution-plan.md](execution-plan.md) | Phases, tasks, agent + model routing (haiku / sonnet / opus) |
+| [external-control-design.md](external-control-design.md) | v0.3 CLI, URL scheme, App Intents, locks, JSON contract |
+| [agents.md](agents.md) | Agent/automation guide: `ohmydock`, exit codes, safe apply workflow |
 | [distribution.md](distribution.md) | Homebrew tap / cask plan, release checklist |
 
 ## Example of what the app automates

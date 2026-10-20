@@ -71,6 +71,19 @@ The command prints `OK` when the zip matches the published checksum.
 
 The Dock restarts once per switch, so icons flash briefly.
 
+## Command line and automation
+
+The **`ohmydock`** CLI is bundled at `OhMyDock.app/Contents/Helpers/ohmydock` (Homebrew symlinks it into your PATH). It runs headless; the menu-bar app does not need to be open.
+
+```sh
+ohmydock --json list
+ohmydock apply Work --dry-run --json
+ohmydock apply Work --yes
+ohmydock save "Meeting layout"
+```
+
+Full command reference, exit codes, URL scheme, Shortcuts, and safety rules for scripts and AI agents: **[docs/agents.md](docs/agents.md)**.
+
 ## Safety and privacy
 
 - **Writes go through dockutil.** Dock changes are made by a bundled copy of [dockutil](https://github.com/kcrawford/dockutil) (Apache-2.0). Each write is checked by re-reading the Dock. If a switch fails, the app restores the previous snapshot.
@@ -84,7 +97,7 @@ The Dock restarts once per switch, so icons flash briefly.
 - Launch at login may fail to register on ad-hoc signed builds. The error is shown in Settings.
 - There is no UI for importing or exporting profiles yet.
 - Only the Dock's tile layout is managed. Dock preferences such as size, magnification, and autohide are not yet part of profiles.
-- Planned features that are not built yet: switching triggers (Focus, display, Wi-Fi, schedule, frontmost app), quitting and launching apps on switch, App Intents and Shortcuts actions, a `ohmydock` command-line tool, a URL scheme, and a community profile gallery. Plans are in [docs/](docs/README.md).
+- Automatic switching triggers (Focus, display, Wi-Fi, schedule, frontmost app) and the community profile gallery are not built yet. CLI, URL scheme, and Shortcuts actions are documented in [docs/agents.md](docs/agents.md). Plans are in [docs/](docs/README.md).
 
 ## Build from source
 

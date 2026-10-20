@@ -152,20 +152,24 @@ UI:
 
 **Done when:** a switch can quit A's apps, open B's, and apply B's prefs. An exported script reproduces the Dock on a clean user account.
 
-### M3 (v0.3): Automation, CLI
+### M3 (v0.3): External control
+
+Normative spec: [external-control-design.md](external-control-design.md). Agent guide: [agents.md](agents.md).
+
+**Shipped**
+
+- [x] Shared `ExternalCommandCenter` in `OhMyDockCore`, advisory file locks, snapshot `source` tag (`cli`, `url`, `intent`, `menu`, `hotkey`).
+- [x] `ohmydock` CLI (swift-argument-parser): full command set in the design §3; headless apply (no URL/XPC handoff).
+- [x] URL scheme `ohmydock://` (apply, save, undo, open); external-control consent setting; x-callback-url rules.
+- [x] App Intents: `ApplyProfileIntent`, `SaveCurrentDockIntent`, `ListProfilesIntent`, `UndoLastChangeIntent`.
+- [x] Packaging: `Contents/Helpers/ohmydock`, cask `binary` + man page, completions.
+
+**Postponed (triggers / Focus Filter — not v0.3)**
 
 - [ ] `TriggerEngine`: rule list (trigger → profile), debounce, and the "never quit apps from automatic triggers unless opted in" rule.
-- [ ] Trigger sources:
-  - Focus Filter (`SetFocusFilterIntent`)
-  - Display (`didChangeScreenParametersNotification` + screen fingerprint)
-  - Wi-Fi (CoreWLAN SSID; needs Location permission on modern macOS, verify)
-  - Schedule
-  - Frontmost app (throttled)
-- [ ] App Intents: `ApplyProfileIntent`, `SaveCurrentDockIntent`, `ListProfilesIntent`.
-- [ ] URL scheme `ohmydock://apply?profile=…`.
-- [ ] `ohmydock` CLI (swift-argument-parser): `list`, `apply <name>`, `save <name>`, `export <name>`, `undo`. It reads the same store. If the app is running, the CLI hands off to it via URL scheme or XPC.
+- [ ] Trigger sources: Focus Filter (`SetFocusFilterIntent`), display, Wi-Fi, schedule, frontmost app (throttled).
 
-**Done when:** connecting an external display or changing Focus switches the profile automatically, and Shortcuts and the CLI work.
+**Done when (v0.3):** `make test` / `make build` green, `verify-release` passes, CLI + URL + Intents match [external-control-design.md](external-control-design.md). Automatic triggers remain a later milestone.
 
 ### M4 (v0.4+): Smart features, sync, gallery
 
