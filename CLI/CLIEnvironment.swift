@@ -47,8 +47,7 @@ enum CLIEnvironment {
     }
 
     private static var plistOverrideActive: Bool {
-        let raw = ProcessInfo.processInfo.environment[DockPlistEnvironment.overrideKey]
-        return raw != nil && !(raw?.isEmpty ?? true)
+        OhMyDockProcessEnvironment.string(for: DockPlistEnvironment.overrideKey) != nil
     }
 
     private static func makeBackend(dockutil: URL?) throws -> any DockBackend {

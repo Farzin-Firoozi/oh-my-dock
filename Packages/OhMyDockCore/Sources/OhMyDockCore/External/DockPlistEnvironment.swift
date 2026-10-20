@@ -15,7 +15,7 @@ public enum DockPlistEnvironment {
 
     /// Returns the override path when set and not the live Dock plist; throws before any Dock API use.
     public static func resolvedOverridePlist() throws -> URL? {
-        guard let raw = ProcessInfo.processInfo.environment[overrideKey], !raw.isEmpty else { return nil }
+        guard let raw = OhMyDockProcessEnvironment.string(for: overrideKey) else { return nil }
         let expanded = (raw as NSString).expandingTildeInPath
         let url = URL(fileURLWithPath: expanded, isDirectory: false).standardizedFileURL
         let resolvedPath = url.resolvingSymlinksInPath().standardized.path(percentEncoded: false)

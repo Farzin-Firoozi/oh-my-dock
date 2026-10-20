@@ -4,7 +4,6 @@ import Testing
 
 @Suite(.serialized) struct DockPlistOverrideServicesTests {
     @Test func snapshotStoreUsesFileDomainWhenOverrideSet() async throws {
-        try await ExternalTestSupport.withExclusiveEnvironment {
         let support = FileManager.default.temporaryDirectory
             .appendingPathComponent("ohmydock-override-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: support, withIntermediateDirectories: true)
@@ -20,40 +19,34 @@ import Testing
         </dict></plist>
         """.utf8).write(to: plist)
 
-        unsetenv(DockPlistEnvironment.overrideKey)
-        setenv(SupportPaths.supportDirEnvironmentKey, support.path, 1)
-        setenv(DockPlistEnvironment.overrideKey, plist.path, 1)
-        defer {
-            unsetenv(DockPlistEnvironment.overrideKey)
-            unsetenv(SupportPaths.supportDirEnvironmentKey)
-        }
-
-        let snapshotsDir = support.appendingPathComponent("snapshots", isDirectory: true)
-        try FileManager.default.createDirectory(at: snapshotsDir, withIntermediateDirectories: true)
-        let store = try DockPlistOverrideServices.makeSnapshotStore(rootDirectory: snapshotsDir)
-        let first = try await store.save(reason: "Test")
-        let serviceStore = try DockPlistOverrideServices.makeSnapshotStore(rootDirectory: snapshotsDir)
-        let second = try await serviceStore.save(reason: "Again")
-        #expect(first.id != second.id)
-        #expect(FileManager.default.fileExists(atPath: plist.path))
+        try await ExternalTestSupport.withEnvironment([
+            SupportPaths.supportDirEnvironmentKey: support.path,
+            DockPlistEnvironment.overrideKey: plist.path,
+        ]) {
+            let snapshotsDir = support.appendingPathComponent("snapshots", isDirectory: true)
+            try FileManager.default.createDirectory(at: snapshotsDir, withIntermediateDirectories: true)
+            let store = try DockPlistOverrideServices.makeSnapshotStore(rootDirectory: snapshotsDir)
+            let first = try await store.save(reason: "Test")
+            let serviceStore = try DockPlistOverrideServices.makeSnapshotStore(rootDirectory: snapshotsDir)
+            let second = try await serviceStore.save(reason: "Again")
+            #expect(first.id != second.id)
+            #expect(FileManager.default.fileExists(atPath: plist.path))
         }
     }
 
     @Test func liveDomainIORefusesWhenOverrideSet() async throws {
-        try await ExternalTestSupport.withExclusiveEnvironment {
         let plist = FileManager.default.temporaryDirectory
             .appendingPathComponent("ohmydock-live-refuse-\(UUID().uuidString).plist")
         FileManager.default.createFile(atPath: plist.path, contents: Data())
         defer { try? FileManager.default.removeItem(at: plist) }
 
-        unsetenv(DockPlistEnvironment.overrideKey)
-        setenv(DockPlistEnvironment.overrideKey, plist.path, 1)
-        defer { unsetenv(DockPlistEnvironment.overrideKey) }
-
-        let io = LiveDockDomainIO(processRunner: StubProcessRunner())
-        await #expect(throws: DockDomainIOError.liveDomainRefusedUnderPlistOverride) {
-            try await io.exportDomain(to: plist)
-        }
+        try await ExternalTestSupport.withEnvironment([
+            DockPlistEnvironment.overrideKey: plist.path,
+        ]) {
+            let io = LiveDockDomainIO(processRunner: StubProcessRunner())
+            await #expect(throws: DockDomainIOError.liveDomainRefusedUnderPlistOverride) {
+                try await io.exportDomain(to: plist)
+            }
         }
     }
 

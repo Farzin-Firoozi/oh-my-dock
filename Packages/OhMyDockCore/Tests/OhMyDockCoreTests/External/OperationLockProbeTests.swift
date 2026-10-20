@@ -4,7 +4,7 @@ import Testing
 
 @Suite(.serialized) struct OperationLockProbeTests {
     @Test func sameProcessProbeDoesNotReleaseHeldMutationLocks() async throws {
-        let root = ExternalTestSupport.tempSupportRoot()
+        try await ExternalTestSupport.withSupportRoot { root in
         let locks = try OperationLock(supportRoot: root)
 
         try await locks.withMutationLocks(timeout: .seconds(2)) {
@@ -15,10 +15,11 @@ import Testing
             #expect(locks.isPreviewHeld())
             #expect(locks.isOperationHeld())
         }
+        }
     }
 
     @Test func sharedLockProbeDoesNotReleaseSharedHold() async throws {
-        let root = ExternalTestSupport.tempSupportRoot()
+        try await ExternalTestSupport.withSupportRoot { root in
         let locks = try OperationLock(supportRoot: root)
 
         try await locks.withSharedOperation(timeout: .seconds(2)) {
@@ -26,11 +27,12 @@ import Testing
             _ = locks.isPreviewHeld()
             #expect(!locks.isOperationHeld())
         }
+        }
     }
 
     @Test func childProcessContentionIsVisible() async throws {
-        let root = ExternalTestSupport.tempSupportRoot()
-        let lockURL = try SupportPaths.operationLockURL()
+        try await ExternalTestSupport.withSupportRoot { root in
+        let lockURL = root.appendingPathComponent("operation.lock")
         FileManager.default.createFile(atPath: lockURL.path, contents: Data())
 
         let process = Process()
@@ -52,5 +54,6 @@ import Testing
 
         process.terminate()
         process.waitUntilExit()
+        }
     }
 }

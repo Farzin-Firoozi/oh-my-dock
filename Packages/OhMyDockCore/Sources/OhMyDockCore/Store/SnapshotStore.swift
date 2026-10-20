@@ -105,7 +105,7 @@ public struct LiveDockDomainIO: DockDomainIO {
     }
 
     private func refuseUnderPlistOverride() throws {
-        let raw = ProcessInfo.processInfo.environment[DockPlistEnvironment.overrideKey]
+        let raw = OhMyDockProcessEnvironment.string(for: DockPlistEnvironment.overrideKey)
         guard raw != nil, !(raw?.isEmpty ?? true) else { return }
         throw DockDomainIOError.liveDomainRefusedUnderPlistOverride
     }

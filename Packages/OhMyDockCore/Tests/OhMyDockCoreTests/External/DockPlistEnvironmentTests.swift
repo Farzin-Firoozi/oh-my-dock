@@ -3,11 +3,10 @@ import Testing
 @testable import OhMyDockCore
 
 @Suite(.serialized) struct DockPlistEnvironmentTests {
-    @Test func tildePathToLivePlistIsRefused() async throws {
-        try await ExternalTestSupport.withExclusiveEnvironment {
-            unsetenv(DockPlistEnvironment.overrideKey)
-            defer { unsetenv(DockPlistEnvironment.overrideKey) }
-            setenv(DockPlistEnvironment.overrideKey, "~/Library/Preferences/com.apple.dock.plist", 1)
+    @Test func tildePathToLivePlistIsRefused() async {
+        await ExternalTestSupport.withEnvironment([
+            DockPlistEnvironment.overrideKey: "~/Library/Preferences/com.apple.dock.plist",
+        ]) {
             #expect(throws: DockPlistEnvironmentError.liveDockPlistRefused) {
                 _ = try DockPlistEnvironment.resolvedOverridePlist()
             }
@@ -27,10 +26,9 @@ import Testing
         let hardLink = directory.appendingPathComponent("hardlink.plist")
         try FileManager.default.linkItem(at: live, to: hardLink)
 
-        try await ExternalTestSupport.withExclusiveEnvironment {
-            unsetenv(DockPlistEnvironment.overrideKey)
-            defer { unsetenv(DockPlistEnvironment.overrideKey) }
-            setenv(DockPlistEnvironment.overrideKey, hardLink.path, 1)
+        await ExternalTestSupport.withEnvironment([
+            DockPlistEnvironment.overrideKey: hardLink.path,
+        ]) {
             #expect(throws: DockPlistEnvironmentError.liveDockPlistRefused) {
                 _ = try DockPlistEnvironment.resolvedOverridePlist()
             }

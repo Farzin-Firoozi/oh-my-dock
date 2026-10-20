@@ -9,7 +9,7 @@ public enum SupportPaths {
     public static let supportDirEnvironmentKey = "OHMYDOCK_SUPPORT_DIR"
 
     public static func root(fileManager: FileManager = .default) throws -> URL {
-        if let override = ProcessInfo.processInfo.environment[supportDirEnvironmentKey] {
+        if let override = OhMyDockProcessEnvironment.string(for: supportDirEnvironmentKey) {
             guard override.hasPrefix("/") else {
                 throw SupportPathsError.relativeSupportDirectory(override)
             }

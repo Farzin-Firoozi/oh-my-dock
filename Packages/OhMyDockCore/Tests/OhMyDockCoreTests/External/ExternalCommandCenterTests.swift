@@ -4,21 +4,22 @@ import Testing
 
 @Suite(.serialized) struct ExternalCommandCenterTests {
     @Test func listIsEmptyInitially() async throws {
-        _ = ExternalTestSupport.tempSupportRoot()
-        let center = try ExternalTestSupport.makeCenter()
-        let result = await center.run(ExternalRequest(command: .list, source: .cli))
-        #expect(result.exitCode == 0)
-        #expect(result.envelope.result?.profiles?.isEmpty == true)
+        try await ExternalTestSupport.withSupportRoot { _ in
+            let center = try ExternalTestSupport.makeCenter()
+            let result = await center.run(ExternalRequest(command: .list, source: .cli))
+            #expect(result.exitCode == 0)
+            #expect(result.envelope.result?.profiles?.isEmpty == true)
+        }
     }
 
     @Test func livePlistOverrideIsRefused() async throws {
-        try await ExternalTestSupport.withExclusiveEnvironment {
-            unsetenv(DockPlistEnvironment.overrideKey)
-            _ = ExternalTestSupport.tempSupportRoot()
-            let live = DockPlistEnvironment.liveDockPlistURL.path
-            setenv(DockPlistEnvironment.overrideKey, live, 1)
-            defer { unsetenv(DockPlistEnvironment.overrideKey) }
-            let center = try ExternalTestSupport.makeCenter()
+        let support = ExternalTestSupport.tempSupportRoot()
+        let live = DockPlistEnvironment.liveDockPlistURL.path
+        try await ExternalTestSupport.withEnvironment([
+            SupportPaths.supportDirEnvironmentKey: support.path,
+            DockPlistEnvironment.overrideKey: live,
+        ]) {
+            let center = try ExternalTestSupport.makeCenter(supportRoot: support)
             let result = await center.run(ExternalRequest(command: .list, source: .cli))
             #expect(result.exitCode == 2)
             #expect(result.envelope.error?.reason == "liveDockPlistRefused")
@@ -26,77 +27,80 @@ import Testing
     }
 
     @Test func applyNoChangesIsIdempotent() async throws {
-        _ = ExternalTestSupport.tempSupportRoot()
-        let dock = FakeDockBackend()
-        let center = try ExternalTestSupport.makeCenter(dock: dock)
-        let state = try await dock.read()
-        let profile = Profile(name: "Work", apps: state.apps, others: state.others)
-        try await center.profiles.save(profile)
+        try await ExternalTestSupport.withSupportRoot { _ in
+            let dock = FakeDockBackend()
+            let center = try ExternalTestSupport.makeCenter(dock: dock)
+            let state = try await dock.read()
+            let profile = Profile(name: "Work", apps: state.apps, others: state.others)
+            try await center.profiles.save(profile)
 
-        let apply = await center.run(ExternalRequest(
-            command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
-            source: .cli,
-            yes: true
-        ))
-        #expect(apply.exitCode == 0)
-        #expect(apply.envelope.result?.status == "noChanges")
+            let apply = await center.run(ExternalRequest(
+                command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
+                source: .cli,
+                yes: true
+            ))
+            #expect(apply.exitCode == 0)
+            #expect(apply.envelope.result?.status == "noChanges")
 
-        let again = await center.run(ExternalRequest(
-            command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
-            source: .cli,
-            yes: true
-        ))
-        #expect(again.exitCode == 0)
-        #expect(again.envelope.result?.status == "noChanges")
+            let again = await center.run(ExternalRequest(
+                command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
+                source: .cli,
+                yes: true
+            ))
+            #expect(again.exitCode == 0)
+            #expect(again.envelope.result?.status == "noChanges")
+        }
     }
 
     @Test func quitRequiresBothFlags() async throws {
-        _ = ExternalTestSupport.tempSupportRoot()
-        let dock = FakeDockBackend()
-        let switcher = ConfigurableSwitcher(
-            plan: SwitchPlan(scope: .none, willQuit: [RunningAppInfo(
-                processIdentifier: 1,
-                bundleId: "com.example.app",
-                name: "Example",
-                activationPolicy: .regular,
-                isFinishedLaunching: true
-            )], willLaunch: [])
-        )
-        let center = try ExternalTestSupport.makeCenter(dock: dock, switcher: switcher)
-        let state = try await dock.read()
-        var profile = Profile(name: "Work", apps: state.apps, others: state.others)
-        profile.apps.append(.app(AppRef(bundleId: "com.other.app", name: "Other", path: "/Apps/Other.app")))
-        try await center.profiles.save(profile)
+        try await ExternalTestSupport.withSupportRoot { _ in
+            let dock = FakeDockBackend()
+            let switcher = ConfigurableSwitcher(
+                plan: SwitchPlan(scope: .none, willQuit: [RunningAppInfo(
+                    processIdentifier: 1,
+                    bundleId: "com.example.app",
+                    name: "Example",
+                    activationPolicy: .regular,
+                    isFinishedLaunching: true
+                )], willLaunch: [])
+            )
+            let center = try ExternalTestSupport.makeCenter(dock: dock, switcher: switcher)
+            let state = try await dock.read()
+            var profile = Profile(name: "Work", apps: state.apps, others: state.others)
+            profile.apps.append(.app(AppRef(bundleId: "com.other.app", name: "Other", path: "/Apps/Other.app")))
+            try await center.profiles.save(profile)
 
-        let noFlags = await center.run(ExternalRequest(
-            command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
-            source: .cli
-        ))
-        #expect(noFlags.exitCode == 5)
+            let noFlags = await center.run(ExternalRequest(
+                command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
+                source: .cli
+            ))
+            #expect(noFlags.exitCode == 5)
 
-        let yesOnly = await center.run(ExternalRequest(
-            command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
-            source: .cli,
-            yes: true
-        ))
-        #expect(yesOnly.exitCode == 5)
+            let yesOnly = await center.run(ExternalRequest(
+                command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
+                source: .cli,
+                yes: true
+            ))
+            #expect(yesOnly.exitCode == 5)
 
-        let both = await center.run(ExternalRequest(
-            command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
-            source: .cli,
-            yes: true,
-            allowQuit: true
-        ))
-        #expect(both.exitCode == 0)
+            let both = await center.run(ExternalRequest(
+                command: .apply(profile: "Work", dryRun: false, quitScope: nil, keepRunning: []),
+                source: .cli,
+                yes: true,
+                allowQuit: true
+            ))
+            #expect(both.exitCode == 0)
+        }
     }
 
     @Test func snapshotSourceTagRoundTrip() async throws {
-        _ = ExternalTestSupport.tempSupportRoot()
-        let snapshots = SnapshotStore(rootDirectory: try SupportPaths.snapshotsDirectory())
-        let saved = try await snapshots.save(reason: "Before applying profile Tagged", profileName: "Tagged", source: .cli)
-        #expect(saved.source == .cli)
-        let listed = await snapshots.list().snapshots
-        #expect(listed.first?.source == .cli)
+        try await ExternalTestSupport.withSupportRoot { _ in
+            let snapshots = SnapshotStore(rootDirectory: try SupportPaths.snapshotsDirectory())
+            let saved = try await snapshots.save(reason: "Before applying profile Tagged", profileName: "Tagged", source: .cli)
+            #expect(saved.source == .cli)
+            let listed = await snapshots.list().snapshots
+            #expect(listed.first?.source == .cli)
+        }
     }
 
     @Test func oldSnapshotJSONDecodesWithoutSource() throws {

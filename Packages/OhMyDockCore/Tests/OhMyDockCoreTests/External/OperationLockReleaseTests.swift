@@ -5,8 +5,8 @@ import Testing
 
 @Suite(.serialized) struct OperationLockReleaseTests {
     @Test func lockReleasedWhenHolderProcessDies() async throws {
-        let root = ExternalTestSupport.tempSupportRoot()
-        let lockURL = try SupportPaths.operationLockURL()
+        try await ExternalTestSupport.withSupportRoot { root in
+        let lockURL = root.appendingPathComponent("operation.lock")
         FileManager.default.createFile(atPath: lockURL.path, contents: Data())
 
         let process = Process()
@@ -28,5 +28,6 @@ import Testing
         process.waitUntilExit()
         try await Task.sleep(for: .milliseconds(50))
         #expect(!probe.isOperationHeld())
+        }
     }
 }
