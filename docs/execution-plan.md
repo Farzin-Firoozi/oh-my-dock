@@ -107,12 +107,14 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 
 ## Phase 5: v0.3 (M3)
 
+**Scope change:** all automatic triggers (engine, display/schedule/frontmost, Wi-Fi, Focus Filter) are postponed to a later release. v0.3 ships App Intents, the `ohmydock://` URL scheme, and the CLI.
+
 | # | Task | Model | Group |
 |---|---|---|---|
-| 5.1 | **`TriggerEngine`**: rules, debounce, priority, "no quit from automatic triggers" | **Sol** | A |
-| 5.2 | Triggers: display, schedule, frontmost app (throttled) | Grok | B |
-| 5.3 | Focus Filter (`SetFocusFilterIntent`) + App Intents (apply/save/list) | Sonnet | B |
-| 5.4 | Wi-Fi trigger (CoreWLAN + Location permission flow) | Flash-H | B |
+| 5.1 | **Postponed.** **`TriggerEngine`**: rules, debounce, priority, "no quit from automatic triggers" | **Sol** | A |
+| 5.2 | **Postponed.** Triggers: display, schedule, frontmost app (throttled) | Grok | B |
+| 5.3 | App Intents (apply/save/list). **Focus Filter (`SetFocusFilterIntent`) postponed with the triggers** | Sonnet | B |
+| 5.4 | **Postponed.** Wi-Fi trigger (CoreWLAN + Location permission flow) | Flash-H | B |
 | 5.5 | URL scheme `ohmydock://` | Flash-L | B |
 | 5.6 | `ohmydock` CLI (swift-argument-parser) + app handoff | Composer | B |
 | 5.7 | Cask `binary` stanza for the CLI | Flash-L | C |
