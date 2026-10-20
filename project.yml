@@ -60,6 +60,10 @@ targets:
         CFBundleVersion: "1"
         LSUIElement: true
         LSMinimumSystemVersion: "14.0"
+        CFBundleURLTypes:
+          - CFBundleURLName: io.github.farzin-firoozi.OhMyDock
+            CFBundleURLSchemes:
+              - ohmydock
     settings:
       base:
         PRODUCT_NAME: OhMyDock
@@ -103,6 +107,7 @@ targets:
       - path: App/Settings
       - path: App/Updates
       - path: App/Sheets
+      - path: App/URL
     dependencies:
       - package: OhMyDockCore
         product: OhMyDockCore
