@@ -40,6 +40,8 @@ public enum DockDomainIOError: Error, Equatable, Sendable {
     case deleteKeyUnsupported(String)
     case launchFailed(executablePath: String, message: String)
     case commandFailed(arguments: [String], exitStatus: Int32, standardError: String)
+    /// Live `com.apple.dock` domain I/O while `OHMYDOCK_DOCK_PLIST` is set.
+    case liveDomainRefusedUnderPlistOverride
 }
 
 public struct FoundationProcessRunner: ProcessRunner {
@@ -88,15 +90,24 @@ public struct LiveDockDomainIO: DockDomainIO {
     }
 
     public func exportDomain(to url: URL) async throws {
+        try refuseUnderPlistOverride()
         try await run(arguments: ["export", "com.apple.dock", try absolutePath(for: url)])
     }
 
     public func importDomain(from url: URL) async throws {
+        try refuseUnderPlistOverride()
         try await run(arguments: ["import", "com.apple.dock", try absolutePath(for: url)])
     }
 
     public func deleteKey(_ key: String) async throws {
+        try refuseUnderPlistOverride()
         try await run(arguments: ["delete", "com.apple.dock", key])
+    }
+
+    private func refuseUnderPlistOverride() throws {
+        let raw = ProcessInfo.processInfo.environment[DockPlistEnvironment.overrideKey]
+        guard raw != nil, !(raw?.isEmpty ?? true) else { return }
+        throw DockDomainIOError.liveDomainRefusedUnderPlistOverride
     }
 
     private func run(arguments: [String]) async throws {

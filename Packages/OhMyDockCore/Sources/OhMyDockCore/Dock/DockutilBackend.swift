@@ -192,26 +192,7 @@ public struct DockutilBackend: DockBackend {
     /// case-insensitive, so compare lowercased paths too; the inode comparison catches hard
     /// links, which no path comparison can.
     private func aliasesLiveDockPlist(_ path: String) -> Bool {
-        for candidate in liveDockPlistURLs() {
-            let candidatePaths = [
-                candidate.path(percentEncoded: false),
-                candidate.resolvingSymlinksInPath().standardized.path(percentEncoded: false),
-            ]
-            if candidatePaths.contains(where: { $0.lowercased() == path.lowercased() }) {
-                return true
-            }
-            if candidatePaths.contains(where: { Self.isSameFile(path, $0) }) {
-                return true
-            }
-        }
-        return false
-    }
-
-    private static func isSameFile(_ first: String, _ second: String) -> Bool {
-        var a = stat()
-        var b = stat()
-        guard stat(first, &a) == 0, stat(second, &b) == 0 else { return false }
-        return a.st_dev == b.st_dev && a.st_ino == b.st_ino
+        DockPlistLiveDetection.aliasesLiveDockPlist(path, candidates: liveDockPlistURLs())
     }
 
     // MARK: - Defaults
@@ -228,21 +209,6 @@ public struct DockutilBackend: DockBackend {
     /// `~/Library/Preferences/com.apple.dock.plist` for this process's user and for the console
     /// user, the one dockutil treats as live.
     static func defaultLiveDockPlistURLs() -> [URL] {
-        var homes = [
-            NSHomeDirectory(),
-            FileManager.default.homeDirectoryForCurrentUser.path(percentEncoded: false),
-        ]
-        if let home = NSHomeDirectoryForUser(NSUserName()) {
-            homes.append(home)
-        }
-        if let console = SCDynamicStoreCopyConsoleUser(nil, nil, nil) as String?,
-           let home = NSHomeDirectoryForUser(console)
-        {
-            homes.append(home)
-        }
-        var seen: Set<String> = []
-        return homes.filter { seen.insert($0).inserted }.map {
-            URL(fileURLWithPath: $0).appendingPathComponent("Library/Preferences/com.apple.dock.plist")
-        }
+        DockPlistLiveDetection.liveDockPlistURLs()
     }
 }

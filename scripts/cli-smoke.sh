@@ -79,6 +79,25 @@ run_json status status
 run_json current current
 run_json doctor doctor
 
+# Dock mutations against temp plist only (restore / undo must not touch live plist).
+CALC="/System/Applications/Calculator.app"
+if [[ -d "$CALC" ]] && [[ -x "$DOCKUTIL" ]]; then
+  "$DOCKUTIL" --add "$CALC" --no-restart "$PLIST" >/dev/null 2>&1 || true
+fi
+run_json apply-write apply "Smoke profile" --yes
+snapshot_id="$(python3 - <<'PY' "$TMP/out.json"
+import json, sys
+with open(sys.argv[1]) as f:
+    doc = json.load(f)
+sid = doc.get("result", {}).get("snapshotID")
+if not sid:
+    raise SystemExit("missing snapshotID from apply")
+print(sid)
+PY
+)"
+run_json restore restore "$snapshot_id" --yes
+run_json undo undo
+
 set +e
 "$CLI" --json --non-interactive apply "missing-profile-xyz" --dry-run >"$TMP/missing.json" 2>"$TMP/missing.err"
 missing_code=$?

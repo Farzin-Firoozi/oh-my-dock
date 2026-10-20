@@ -5,11 +5,11 @@ enum CLIEnvironment {
     static func makeCenter() throws -> ExternalCommandCenter {
         _ = try SupportPaths.ensureRootExists()
         let profiles = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())
-        let snapshots = SnapshotStore()
+        let snapshots = try DockPlistOverrideServices.makeSnapshotStore()
         let dockutil = resolveDockutilURL()
         let backend = try makeBackend(dockutil: dockutil)
         let restarter: any DockRestarting = plistOverrideActive ? NoOpDockRestarter() : LiveDockRestarter()
-        let prefsWriter = DockPrefsWriter()
+        let prefsWriter = try DockPlistOverrideServices.makePrefsWriter()
         let switcher = AppSwitcher(
             provider: LiveRunningApps(),
             launcher: LiveAppLauncher(),

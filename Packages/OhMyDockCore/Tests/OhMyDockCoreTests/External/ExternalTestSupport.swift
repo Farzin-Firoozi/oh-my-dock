@@ -2,8 +2,22 @@ import Foundation
 @testable import OhMyDockCore
 
 enum ExternalTestSupport {
+    private actor ProcessEnvironmentGate {
+        func run<T: Sendable>(_ body: @Sendable () async throws -> T) async rethrows -> T {
+            try await body()
+        }
+    }
+
+    private static let environmentGate = ProcessEnvironmentGate()
+
+    /// Serializes mutations to `OHMYDOCK_*` process environment (Swift Testing runs suites in parallel).
+    static func withExclusiveEnvironment<T: Sendable>(
+        _ body: @Sendable () async throws -> T
+    ) async rethrows -> T {
+        try await environmentGate.run(body)
+    }
+
     static func tempSupportRoot() -> URL {
-        unsetenv(DockPlistEnvironment.overrideKey)
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ohmydock-ext-\(UUID().uuidString)", isDirectory: true)
         try? FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)

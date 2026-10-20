@@ -12,15 +12,17 @@ import Testing
     }
 
     @Test func livePlistOverrideIsRefused() async throws {
-        unsetenv(DockPlistEnvironment.overrideKey)
-        _ = ExternalTestSupport.tempSupportRoot()
-        let live = DockPlistEnvironment.liveDockPlistURL.path
-        setenv(DockPlistEnvironment.overrideKey, live, 1)
-        defer { unsetenv(DockPlistEnvironment.overrideKey) }
-        let center = try ExternalTestSupport.makeCenter()
-        let result = await center.run(ExternalRequest(command: .list, source: .cli))
-        #expect(result.exitCode == 2)
-        #expect(result.envelope.error?.reason == "liveDockPlistRefused")
+        try await ExternalTestSupport.withExclusiveEnvironment {
+            unsetenv(DockPlistEnvironment.overrideKey)
+            _ = ExternalTestSupport.tempSupportRoot()
+            let live = DockPlistEnvironment.liveDockPlistURL.path
+            setenv(DockPlistEnvironment.overrideKey, live, 1)
+            defer { unsetenv(DockPlistEnvironment.overrideKey) }
+            let center = try ExternalTestSupport.makeCenter()
+            let result = await center.run(ExternalRequest(command: .list, source: .cli))
+            #expect(result.exitCode == 2)
+            #expect(result.envelope.error?.reason == "liveDockPlistRefused")
+        }
     }
 
     @Test func applyNoChangesIsIdempotent() async throws {
