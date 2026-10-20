@@ -191,6 +191,8 @@ public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
     /// Absent in snapshots written before Dock preferences were applied; those restore from the
     /// plist alone.
     public var prefsImage: SnapshotPrefsImage?
+    /// Where the mutation came from (`menu`, `cli`, …). Omitted in older files.
+    public var source: ControlSource?
 
     public init(
         id: UUID,
@@ -200,7 +202,8 @@ public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
         byteSize: Int,
         sha256: String,
         pinned: Bool = false,
-        prefsImage: SnapshotPrefsImage? = nil
+        prefsImage: SnapshotPrefsImage? = nil,
+        source: ControlSource? = nil
     ) {
         self.id = id
         self.createdAt = createdAt
@@ -210,6 +213,7 @@ public struct Snapshot: Codable, Hashable, Identifiable, Sendable {
         self.sha256 = sha256
         self.pinned = pinned
         self.prefsImage = prefsImage
+        self.source = source
     }
 }
 
@@ -291,8 +295,9 @@ public actor SnapshotStore {
     }
 
     public static func defaultDirectory(fileManager: FileManager = .default) -> URL {
-        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("oh-my-dock/snapshots", isDirectory: true)
+        (try? SupportPaths.snapshotsDirectory(fileManager: fileManager))
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("oh-my-dock/snapshots", isDirectory: true)
     }
 
     @discardableResult
@@ -300,13 +305,15 @@ public actor SnapshotStore {
         reason: String,
         profileName: String? = nil,
         pinned: Bool = false,
-        prefsPreImage: DockPrefsRollbackImage? = nil
+        prefsPreImage: DockPrefsRollbackImage? = nil,
+        source: ControlSource? = nil
     ) async throws -> Snapshot {
         try await save(
             reason: reason,
             profileName: profileName,
             pinned: pinned,
             prefsPreImage: prefsPreImage,
+            source: source,
             alsoProtecting: nil
         )
     }
@@ -319,6 +326,7 @@ public actor SnapshotStore {
         profileName: String?,
         pinned: Bool,
         prefsPreImage: DockPrefsRollbackImage?,
+        source: ControlSource? = nil,
         alsoProtecting extraProtectedID: UUID?
     ) async throws -> Snapshot {
         try ensureRootDirectoryExists()
@@ -348,7 +356,8 @@ public actor SnapshotStore {
             byteSize: data.count,
             sha256: sha256(of: data),
             pinned: pinned,
-            prefsImage: prefsPreImage.map(SnapshotPrefsImage.init)
+            prefsImage: prefsPreImage.map(SnapshotPrefsImage.init),
+            source: source
         )
         let plistURL = self.plistURL(for: id)
 
@@ -438,7 +447,8 @@ public actor SnapshotStore {
     public func restore(
         id: UUID,
         createSafetySnapshot: Bool = true,
-        prefsWriter: (any DockPrefsWriting)? = nil
+        prefsWriter: (any DockPrefsWriting)? = nil,
+        source: ControlSource? = nil
     ) async throws {
         let snapshot = try loadMetadata(id: id)
         let data = try load(id: id)
@@ -453,6 +463,7 @@ public actor SnapshotStore {
                 profileName: nil,
                 pinned: false,
                 prefsPreImage: nil,
+                source: source,
                 alsoProtecting: id
             )
         }

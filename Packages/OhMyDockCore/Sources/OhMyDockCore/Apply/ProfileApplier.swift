@@ -396,6 +396,7 @@ public actor ProfileApplier {
         _ profile: Profile,
         from source: Profile?,
         trigger: ApplyTrigger = .user,
+        controlSource: ControlSource? = nil,
         confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)? = nil
     ) async throws -> ApplyResult {
         let previous = inFlight
@@ -405,7 +406,13 @@ public actor ProfileApplier {
         let task = Task<ApplyResult, any Error> {
             // Wait for the cancelled predecessor to settle (including its rollback).
             _ = await previous?.task.result
-            return try await self.run(profile, source: source, trigger: trigger, confirm: confirm)
+            return try await self.run(
+                profile,
+                source: source,
+                trigger: trigger,
+                controlSource: controlSource,
+                confirm: confirm
+            )
         }
         inFlight = InFlight(id: id, task: task)
 
@@ -433,6 +440,7 @@ public actor ProfileApplier {
         _ profile: Profile,
         source: Profile?,
         trigger: ApplyTrigger,
+        controlSource: ControlSource?,
         confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
     ) async throws -> ApplyResult {
         if Task.isCancelled { return .cancelled(rolledBack: false) }
@@ -498,7 +506,8 @@ public actor ProfileApplier {
             snapshot = try await snapshots.save(
                 reason: "Before applying profile \(profile.name)",
                 profileName: profile.name,
-                prefsPreImage: prefsImage
+                prefsPreImage: prefsImage,
+                source: controlSource
             )
 
             // Past this point the snapshot exists but nothing is written yet: leaving without
