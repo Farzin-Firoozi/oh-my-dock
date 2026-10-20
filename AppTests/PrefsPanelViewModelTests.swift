@@ -12,6 +12,8 @@ private actor FakePreviewer: DockPrefsPreviewing {
     private(set) var running = 0
     private(set) var maxRunning = 0
     var failBegin = false
+    /// `begin` wrote the values, then could not take them back.
+    var failBeginRollback = false
     var failRevert = false
     var failCapture = false
     var delay: Duration = .zero
@@ -35,6 +37,7 @@ private actor FakePreviewer: DockPrefsPreviewing {
         beginCalls.append(prefs)
         if delay != .zero { try await Task.sleep(for: delay) }
         if failBegin { throw Boom() }
+        if failBeginRollback { throw PrefsPreviewError.rollbackFailed(snapshotID: UUID(), reason: "stuck") }
         if prefs == live { return nil }
         live = prefs
         return PrefsPreviewSession(snapshotID: UUID(), image: DockPrefsRollbackImage(previousValues: [:]), changedKeys: [.tileSize])
@@ -50,8 +53,9 @@ private actor FakePreviewer: DockPrefsPreviewing {
         live = captured
     }
 
-    func configure(failBegin: Bool? = nil, failRevert: Bool? = nil, delay: Duration? = nil) {
+    func configure(failBegin: Bool? = nil, failBeginRollback: Bool? = nil, failRevert: Bool? = nil, delay: Duration? = nil) {
         if let failBegin { self.failBegin = failBegin }
+        if let failBeginRollback { self.failBeginRollback = failBeginRollback }
         if let failRevert { self.failRevert = failRevert }
         if let delay { self.delay = delay }
     }
@@ -257,11 +261,91 @@ private struct Rig {
         #expect(rig.panel.isPreviewing)
     }
 
+    /// Starts a preview whose Dock write takes a while, and returns once the write is under way.
+    private func startSlowPreview(_ rig: Rig) async -> Task<Void, Never> {
+        await rig.previewer.configure(delay: .milliseconds(80))
+        let task = Task { @MainActor in await rig.panel.preview() }
+        while await rig.previewer.running == 0 { await Task.yield() }
+        return task
+    }
+
+    @Test func aPreviewIsActiveOnTheGateAndForQuitBeforeItsWriteFinishes() async {
+        let rig = Rig(prefs: .displayDefaults)
+        let preview = await startSlowPreview(rig)
+
+        // No session exists yet, but the Dock is being written.
+        #expect(rig.panel.isPreviewing)
+        #expect(rig.gate.isPreviewActive)
+        let coordinator = PreviewQuitCoordinator()
+        coordinator.register(rig.panel)
+        #expect(coordinator.hasActivePreview)
+        await preview.value
+    }
+
+    @Test func quittingDuringAPreviewWriteWaitsForItThenReverts() async {
+        let rig = Rig(prefs: .displayDefaults)
+        let coordinator = PreviewQuitCoordinator()
+        coordinator.register(rig.panel)
+        let preview = await startSlowPreview(rig)
+
+        #expect(await coordinator.revertForQuit() == .reverted)
+        await preview.value
+
+        #expect(await rig.previewer.revertCalls == 1)
+        #expect(await rig.previewer.live == DockPrefs(tileSize: 70, autohide: true))
+        #expect(!rig.panel.isPreviewing)
+        #expect(!rig.gate.isPreviewActive)
+        #expect(!rig.gate.isBusy)
+    }
+
+    @Test func quittingDuringAWriteThatChangesNothingHasNothingLeftToRevert() async {
+        let live = DockPrefs.displayDefaults
+        let rig = Rig(prefs: live, live: live)
+        let coordinator = PreviewQuitCoordinator()
+        coordinator.register(rig.panel)
+        let preview = await startSlowPreview(rig)
+
+        #expect(await coordinator.revertForQuit() == .reverted)
+        await preview.value
+        #expect(await rig.previewer.revertCalls == 0)
+        #expect(!rig.gate.isPreviewActive)
+    }
+
+    @Test func aPreviewWhoseWriteCannotBeTakenBackStaysActive() async {
+        let rig = Rig(prefs: .displayDefaults)
+        await rig.previewer.configure(failBeginRollback: true)
+        await rig.panel.preview()
+
+        // The Dock may hold the previewed values: apply, undo and hotkeys stay blocked.
+        #expect(rig.panel.session == nil)
+        #expect(rig.panel.isPreviewing)
+        #expect(rig.gate.isPreviewActive)
+        #expect(rig.panel.message?.kind == .error)
+
+        // Quit can't revert it and says so, rather than reporting a restored Dock.
+        let coordinator = PreviewQuitCoordinator()
+        coordinator.register(rig.panel)
+        #expect(coordinator.hasActivePreview)
+        #expect(await coordinator.revertForQuit() == .failed)
+        #expect(rig.gate.isPreviewActive)
+
+        // A new preview is refused until the user has dealt with it.
+        await rig.previewer.configure(failBeginRollback: false)
+        await rig.panel.preview()
+        #expect(await rig.previewer.beginCalls.count == 1)
+
+        // Keep acknowledges it and releases the gate.
+        rig.panel.keepPreview()
+        #expect(!rig.panel.isPreviewing)
+        #expect(!rig.gate.isPreviewActive)
+    }
+
     @Test func previewWhenDockAlreadyMatchesStartsNothing() async {
         let live = DockPrefs.displayDefaults
         let rig = Rig(prefs: live, live: live)
         await rig.panel.preview()
         #expect(!rig.panel.isPreviewing)
+        #expect(!rig.gate.isPreviewActive)
         #expect(rig.panel.message?.kind == .info)
     }
 
@@ -286,6 +370,7 @@ private struct Rig {
         await rig.previewer.configure(failBegin: true)
         await rig.panel.preview()
         #expect(!rig.panel.isPreviewing)
+        #expect(!rig.gate.isPreviewActive)
         #expect(rig.panel.message == .init(kind: .error, text: "boom"))
         #expect(rig.gate.isBusy == false)
         #expect(rig.panel.isWorking == false)

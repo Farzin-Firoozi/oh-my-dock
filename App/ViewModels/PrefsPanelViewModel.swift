@@ -73,12 +73,17 @@ final class PrefsPanelViewModel: PreviewReverting {
     private(set) var previewedProfileName: String?
     /// True while a capture-free Dock operation (preview or revert) is queued or running.
     private(set) var isWorking = false
+    /// Set before the first preference is written and cleared once the write has either produced a
+    /// session, changed nothing, or been taken back. It stays set when taking the write back
+    /// failed: the Dock may hold previewed values that no session can revert.
+    private(set) var mayHavePreviewedValues = false
     private(set) var message: Message?
 
     @ObservationIgnored private let previewer: any DockPrefsPreviewing
     @ObservationIgnored private let persist: @MainActor (UUID, DockPrefs?) -> Bool
     let gate: DockOperationGate
     @ObservationIgnored private var profileName: String?
+    @ObservationIgnored private var idleWaiters: [CheckedContinuation<Void, Never>] = []
 
     /// `persist` writes the profile's preferences through the editor and returns false if it refused.
     init(
@@ -92,7 +97,8 @@ final class PrefsPanelViewModel: PreviewReverting {
     }
 
     var isManaged: Bool { prefs != nil }
-    var isPreviewing: Bool { session != nil }
+    /// A preview is on the Dock, or is being written to it right now (or its write could not be undone).
+    var isPreviewing: Bool { session != nil || mayHavePreviewedValues }
     var canEdit: Bool { profileID != nil }
     /// Waiting on another Dock operation (or running ours): previews and reverts are disabled.
     var isBusy: Bool { isWorking || gate.isBusy }
@@ -169,8 +175,12 @@ final class PrefsPanelViewModel: PreviewReverting {
     /// is active it takes the old one back first so the revert target stays the real pre-preview Dock.
     func preview() async {
         guard let target = prefs, !isWorking else { return }
-        isWorking = true
-        defer { isWorking = false }
+        guard session != nil || !mayHavePreviewedValues else {
+            message = Message(kind: .error, text: Self.unrevertableText)
+            return
+        }
+        startWork()
+        defer { endWork() }
         message = nil
         do {
             let started = try await gate.run("Previewing Dock preferences") { () async throws -> PrefsPreviewSession? in
@@ -179,9 +189,22 @@ final class PrefsPanelViewModel: PreviewReverting {
                     setSession(nil)
                     previewedProfileName = nil
                 }
-                let began = try await previewer.begin(target)
+                // From here on the Dock may hold previewed values, before a session exists to say so.
+                // Quit handling and the gate (apply, undo, hotkeys) must already see the preview.
+                setMayHavePreviewedValues(true)
+                let began: PrefsPreviewSession?
+                do {
+                    began = try await previewer.begin(target)
+                } catch let error as PrefsPreviewError {
+                    // The previewer could not take its own write back: the preview stays active.
+                    throw error
+                } catch {
+                    setMayHavePreviewedValues(false)
+                    throw error
+                }
                 // Set before the gate is released, so a queued apply sees the preview.
                 setSession(began)
+                setMayHavePreviewedValues(false)
                 return began
             }
             previewedProfileName = started == nil ? nil : profileName
@@ -196,10 +219,16 @@ final class PrefsPanelViewModel: PreviewReverting {
     /// Restores the values from before the preview. Keeps the preview open on failure so the user can retry.
     @discardableResult
     func revert() async -> Bool {
-        guard let active = session else { return true }
-        guard !isWorking else { return false }
-        isWorking = true
-        defer { isWorking = false }
+        // A revert that arrives while a preview is still being written (quit, mostly) waits for it
+        // to land, then takes it back, rather than giving up on a Dock that is about to change.
+        await waitUntilIdle()
+        guard let active = session else {
+            guard mayHavePreviewedValues else { return true }
+            message = Message(kind: .error, text: Self.unrevertableText)
+            return false
+        }
+        startWork()
+        defer { endWork() }
         do {
             try await gate.run("Reverting Dock preferences") { try await previewer.revert(active) }
             setSession(nil)
@@ -215,6 +244,7 @@ final class PrefsPanelViewModel: PreviewReverting {
     /// Leaves the previewed values on the Dock and ends the preview.
     func keepPreview() {
         setSession(nil)
+        setMayHavePreviewedValues(false)
         previewedProfileName = nil
     }
 
@@ -228,11 +258,33 @@ final class PrefsPanelViewModel: PreviewReverting {
         return true
     }
 
-    /// The one place `session` changes, so the gate's shared preview flag never drifts from it.
+    /// Where `session` changes, so the gate's shared preview flag never drifts from it.
     private func setSession(_ next: PrefsPreviewSession?) {
         session = next
-        gate.isPreviewActive = next != nil
+        gate.isPreviewActive = isPreviewing
     }
+
+    private func setMayHavePreviewedValues(_ next: Bool) {
+        mayHavePreviewedValues = next
+        gate.isPreviewActive = isPreviewing
+    }
+
+    private func startWork() { isWorking = true }
+
+    private func endWork() {
+        isWorking = false
+        let waiters = idleWaiters
+        idleWaiters = []
+        for waiter in waiters { waiter.resume() }
+    }
+
+    private func waitUntilIdle() async {
+        while isWorking {
+            await withCheckedContinuation { idleWaiters.append($0) }
+        }
+    }
+
+    private static let unrevertableText = "The Dock may still hold previewed preferences that can't be reverted from here. Restore “Before previewing Dock preferences” from History, then press Keep."
 
     private static func describe(_ error: any Error) -> String {
         (error as? LocalizedError)?.errorDescription ?? String(describing: error)
