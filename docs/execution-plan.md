@@ -123,7 +123,7 @@ Groups run in order. Tasks in one group can run in parallel in separate worktree
 | 5.D | App Intents: apply, save, list, undo | composer-2.5 | C | 5.A, 5.B | **Done** |
 | 5.E | Packaging: sign, verify-release, cask `binary` / man page, completions | composer-2.5 | C | 5.C | **Done** |
 | 5.F | Docs: `docs/agents.md` and the pointers the design lists | composer-2.5 | D | 5.A–5.E | **Done** |
-| 5.R | Review all of 5.A–5.F and run `make test`, `make build`, `verify-release` | grok-4.7 | E | 5.A–5.F | Pending |
+| 5.R | Review all of 5.A–5.F and run `make test`, `make build`, `verify-release` | grok-4.7 | E | 5.A–5.F | **Done** — reviewed with Sonnet; fixed: in-process preview-lock reentrancy, quit/skip approval re-checked against the fresh preview, undo/restore exit codes, fish completion escaping, `import` read before the lock, case-insensitive forbidden URL query names. Known gaps, deferred: `liveDockPlistRefused` error code (reported as `usage`); `doctor` exit code and `support`/`snapshots` checks; thin `status` fields (`activeProfile`, `dockMatchesActive`, lock state); `show` JSON uses base64 `profileDocument` not `result.profile`; restore/undo failures other than `ApplyError` exit 1; no apply-time user message when a confirmed apply is cancelled because running apps changed; no fish-escaping test |
 
 ### 5.A — Command center, locks, source
 
