@@ -23,6 +23,9 @@ packages:
   KeyboardShortcuts:
     url: https://github.com/sindresorhus/KeyboardShortcuts
     from: 3.1.0
+  ArgumentParser:
+    url: https://github.com/apple/swift-argument-parser
+    from: 1.5.0
 
 targets:
   OhMyDock:
@@ -47,6 +50,7 @@ targets:
       - path: THIRD_PARTY_NOTICES.md
         buildPhase: resources
     dependencies:
+      - target: ohmydock
       - package: OhMyDockCore
         product: OhMyDockCore
       - package: KeyboardShortcuts
@@ -67,6 +71,7 @@ targets:
     settings:
       base:
         PRODUCT_NAME: OhMyDock
+        PRODUCT_MODULE_NAME: OhMyDockApp
         GENERATE_INFOPLIST_FILE: NO
         # Required for notarization (Release). Debug (ad-hoc) builds do not get the runtime flag (flags=0x2(adhoc), not adhoc,runtime), so test hardened-runtime-sensitive behavior on Release builds.
         ENABLE_HARDENED_RUNTIME: YES
@@ -93,6 +98,63 @@ targets:
             fi
             echo "warning: dockutil not built — run make dockutil"
           fi
+      - name: Embed ohmydock CLI
+        basedOnDependencyAnalysis: true
+        inputFiles:
+          - $(BUILT_PRODUCTS_DIR)/ohmydock
+        outputFiles:
+          - $(TARGET_BUILD_DIR)/$(CONTENTS_FOLDER_PATH)/Helpers/ohmydock
+        script: |
+          SRC="$BUILT_PRODUCTS_DIR/ohmydock"
+          DEST="$TARGET_BUILD_DIR/$CONTENTS_FOLDER_PATH/Helpers/ohmydock"
+          if [ -f "$SRC" ]; then
+            mkdir -p "$(dirname "$DEST")"
+            cp -f "$SRC" "$DEST"
+            chmod +x "$DEST"
+          else
+            rm -f "$DEST"
+            if [ "$CONFIGURATION" = "Release" ] || [ "$ACTION" = "install" ]; then
+              echo "error: ohmydock not built — run make cli"
+              exit 1
+            fi
+            echo "warning: ohmydock not built — run make cli"
+          fi
+
+  ohmydock:
+    type: tool
+    platform: macOS
+    sources:
+      - path: CLI
+    dependencies:
+      - package: OhMyDockCore
+        product: OhMyDockCore
+      - package: ArgumentParser
+        product: ArgumentParser
+    settings:
+      base:
+        PRODUCT_NAME: ohmydock
+        PRODUCT_MODULE_NAME: ohmydock
+        TARGET_TEMP_DIR: $(CONFIGURATION_TEMP_DIR)/ohmydock-cli.build
+        ENABLE_HARDENED_RUNTIME: YES
+
+  CLITests:
+    type: bundle.unit-test
+    platform: macOS
+    sources:
+      - path: CLITests
+      - path: CLI
+        excludes:
+          - main.swift
+    dependencies:
+      - package: OhMyDockCore
+        product: OhMyDockCore
+      - package: ArgumentParser
+        product: ArgumentParser
+    settings:
+      base:
+        GENERATE_INFOPLIST_FILE: YES
+        PRODUCT_BUNDLE_IDENTIFIER: io.github.farzin-firoozi.CLITests
+        ENABLE_TESTING_SEARCH_PATHS: YES
 
   # Unhosted: compiles the view-model sources directly instead of launching the app, so tests
   # never start the menu bar app (and its first-launch capture of the live Dock).
@@ -124,12 +186,14 @@ schemes:
     build:
       targets:
         OhMyDock: all
+        ohmydock: all
     run:
       config: Debug
     test:
       config: Debug
       targets:
         - OhMyDockTests
+        - CLITests
     profile:
       config: Release
     analyze:

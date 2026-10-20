@@ -1,4 +1,4 @@
-.PHONY: generate test build dockutil hooks release verify-release
+.PHONY: generate test build cli cli-smoke dockutil hooks release verify-release
 
 generate:
 	xcodegen generate
@@ -9,6 +9,12 @@ test: generate
 
 build: generate
 	xcodebuild -project OhMyDock.xcodeproj -scheme OhMyDock -configuration Debug -derivedDataPath build build
+
+cli: generate
+	xcodebuild -project OhMyDock.xcodeproj -scheme ohmydock -configuration Debug -derivedDataPath build build
+
+cli-smoke: cli
+	./scripts/cli-smoke.sh
 
 dockutil:
 	./scripts/build-dockutil.sh
