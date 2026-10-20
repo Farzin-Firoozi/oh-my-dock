@@ -64,8 +64,9 @@ public actor ProfileStore {
     }
 
     public static func defaultDirectory(fileManager: FileManager = .default) -> URL {
-        fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("oh-my-dock/profiles", isDirectory: true)
+        (try? SupportPaths.profilesDirectory(fileManager: fileManager))
+            ?? fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
+                .appendingPathComponent("oh-my-dock/profiles", isDirectory: true)
     }
 
     public func list() -> ListResult {
