@@ -21,6 +21,16 @@ private actor Probe {
 private struct SlowApplier: ProfileApplying {
     let probe: Probe
 
+    func preview(_ profile: Profile, from source: Profile?, trigger: ApplyTrigger) async throws -> ApplyPreview {
+        ApplyPreview(
+            profileName: profile.name,
+            current: DockState(),
+            target: DockState(),
+            plan: DockPlan(operations: [], summary: ""),
+            skipped: []
+        )
+    }
+
     func apply(_ profile: Profile, confirm: (@Sendable (ApplyPreview) async -> Bool)?) async throws -> ApplyResult {
         await probe.work()
         return .cancelled(rolledBack: false)
@@ -89,6 +99,23 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         try? await Task.sleep(for: .milliseconds(5))
     }
     return condition()
+}
+
+/// One-shot latch for holding a fake confirmation open.
+private actor AsyncGate {
+    private var isOpen = false
+    private var waiters: [CheckedContinuation<Void, Never>] = []
+
+    func wait() async {
+        if isOpen { return }
+        await withCheckedContinuation { waiters.append($0) }
+    }
+
+    func open() {
+        isOpen = true
+        waiters.forEach { $0.resume() }
+        waiters = []
+    }
 }
 
 @MainActor
@@ -236,6 +263,39 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         await history.perform(.restore(snapshot()))
         #expect(history.errorMessage == nil)
         #expect(await probe.finished == 1)
+    }
+
+    @Test func confirmationWaitsWithoutHoldingFileLocks() async throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("gate-confirm-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        let locks = try OperationLock(supportRoot: root)
+        let gate = DockOperationGate(fileLocks: locks)
+        let releaseConfirm = AsyncGate()
+        let preview = ApplyPreview(
+            profileName: "Work",
+            current: DockState(),
+            target: DockState(),
+            plan: DockPlan(operations: [], summary: ""),
+            skipped: [SkippedItem(section: .apps, index: 0, app: AppRef(bundleId: "x", name: "Gone"))],
+            switchPlan: nil
+        )
+        let task = Task { @MainActor in
+            try await gate.runMutationAfterConfirmation(
+                "apply",
+                preview: { preview },
+                confirm: { _ in
+                    await releaseConfirm.wait()
+                    return .accepted
+                },
+                mutate: { _ in true }
+            )
+        }
+        try await Task.sleep(for: .milliseconds(50))
+        #expect(!locks.isOperationHeld())
+        #expect(!locks.isPreviewHeld())
+        await releaseConfirm.open()
+        #expect(try await task.value)
     }
 
     @Test func requireNoPreviewThrowsOnlyWhileAPreviewIsActive() {

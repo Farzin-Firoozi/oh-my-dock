@@ -333,15 +333,29 @@ public struct ExternalCommandCenter: Sendable {
             let previous = match?.primary.flatMap { p in p.id != profile.id ? p : nil }
 
             do {
+                let preview = try await applier.preview(profile, from: previous, trigger: .user)
+                if dryRun {
+                    return try await locks.withSharedOperation(timeout: timeout) {
+                        applyPreviewPayload(name: name, profile: profile, preview: preview, status: "dryRun")
+                    }
+                }
+                if let refusal = cliConfirmationRefusal(request: request, preview: preview, name: name) {
+                    return refusal
+                }
+                let lockedAnswer: ApplyConfirmResult?
+                if let userConfirm = request.confirm {
+                    let answer = await userConfirm(preview)
+                    if !answer.accepted {
+                        return success(name, message: "Cancelled.", payload: { var p = ExternalPayload(); p.status = "cancelled"; return p }())
+                    }
+                    lockedAnswer = answer
+                } else {
+                    lockedAnswer = nil
+                }
                 return try await locks.withMutationLocks(timeout: timeout) {
-                    let preview = try await applier.preview(profile, from: previous, trigger: .user)
-                    if dryRun {
-                        return applyPreviewPayload(name: name, profile: profile, preview: preview, status: "dryRun")
-                    }
-                    if let refusal = cliConfirmationRefusal(request: request, preview: preview, name: name) {
-                        return refusal
-                    }
-                    let confirm = cliConfirmClosure(request: request, keepRunning: keepRunning)
+                    let confirm = lockedAnswer.map { answer in
+                        { @Sendable (_: ApplyPreview) async -> ApplyConfirmResult in answer }
+                    } ?? cliConfirmClosure(request: request, keepRunning: keepRunning)
                     let result = try await applier.apply(
                         profile,
                         from: previous,
@@ -785,7 +799,7 @@ public struct ExternalCommandCenter: Sendable {
         if locks.isPreviewHeld() {
             checks.append(.init(name: "previewLock", status: "warn", detail: "Dock preferences preview is active."))
         }
-        if ProcessInfo.processInfo.environment[DockPlistEnvironment.overrideKey] != nil {
+        if OhMyDockProcessEnvironment.string(for: DockPlistEnvironment.overrideKey) != nil {
             do {
                 _ = try DockPlistEnvironment.resolvedOverridePlist()
                 checks.append(.init(name: "plistOverride", status: "warn", detail: "Test plist override is active."))

@@ -19,6 +19,11 @@ extension ProfileStore: ProfileLibrary {
 
 /// Applies a profile to the Dock. `ProfileApplier` is the live implementation.
 protocol ProfileApplying: Sendable {
+    func preview(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger
+    ) async throws -> ApplyPreview
     func apply(
         _ profile: Profile,
         confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?

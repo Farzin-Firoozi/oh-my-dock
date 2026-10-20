@@ -37,6 +37,7 @@ private actor FakeLibrary: ProfileLibrary {
 /// Scripted applier: records what it was asked and plays back `script`.
 private actor FakeApplier: ProfileApplying {
     typealias Script = @Sendable (Profile, (@Sendable (ApplyPreview) async -> Bool)?) async throws -> ApplyResult
+    typealias PreviewBuilder = @Sendable (Profile) -> ApplyPreview
 
     private(set) var applied: [Profile] = []
     private(set) var triggers: [ApplyTrigger] = []
@@ -44,8 +45,27 @@ private actor FakeApplier: ProfileApplying {
     /// What the user's answer was, exclusions included, for every question asked.
     private(set) var answers: [ApplyConfirmResult] = []
     private var script: Script
+    private let previewBuilder: PreviewBuilder
 
-    init(_ script: @escaping Script) { self.script = script }
+    init(
+        preview: PreviewBuilder? = nil,
+        _ script: @escaping Script
+    ) {
+        self.script = script
+        previewBuilder = preview ?? { profile in
+            ApplyPreview(
+                profileName: profile.name,
+                current: profile.dockState,
+                target: profile.dockState,
+                plan: DockPlan(operations: [], summary: ""),
+                skipped: []
+            )
+        }
+    }
+
+    func preview(_ profile: Profile, from source: Profile?, trigger: ApplyTrigger) async throws -> ApplyPreview {
+        previewBuilder(profile)
+    }
 
     func record(trigger: ApplyTrigger, source: String?) {
         triggers.append(trigger)
@@ -470,8 +490,9 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
     @Test func missingAppsAskForConfirmationAndApplyOnceAccepted() async {
         let work = profile("Work")
-        let applier = FakeApplier { _, confirm in
-            let accepted = await confirm?(preview("Work", skipped: [Self.missing], clearsRecentApps: true)) ?? false
+        let question = preview("Work", skipped: [Self.missing], clearsRecentApps: true)
+        let applier = FakeApplier(preview: { _ in question }) { _, confirm in
+            let accepted = await confirm?(question) ?? false
             return accepted ? .applied(report()) : .cancelled(rolledBack: false)
         }
         let model = makeModel(applier: applier)
@@ -504,8 +525,9 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
     }
 
     @Test func aSwitchThatQuitsAppsAsksForConfirmationAndReportsWhatHappened() async {
-        let applier = FakeApplier { _, confirm in
-            let accepted = await confirm?(Self.quittingPreview("Work")) ?? false
+        let question = Self.quittingPreview("Work")
+        let applier = FakeApplier(preview: { _ in question }) { _, confirm in
+            let accepted = await confirm?(question) ?? false
             guard accepted else { return .cancelled(rolledBack: false) }
             let slack = RunningAppInfo(processIdentifier: 7, bundleId: "com.example.slack", name: "Slack")
             return .applied(ApplyReport(
@@ -549,8 +571,9 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
     /// A fresh applier per test: it records the answers it was given.
     private static func quittingApplier() -> FakeApplier {
-        FakeApplier { _, confirm in
-            let accepted = await confirm?(Self.twoAppQuittingPreview("Work")) ?? false
+        let question = Self.twoAppQuittingPreview("Work")
+        return FakeApplier(preview: { _ in question }) { _, confirm in
+            let accepted = await confirm?(question) ?? false
             return accepted ? .applied(report()) : .cancelled(rolledBack: false)
         }
     }
@@ -660,10 +683,13 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(await applier.triggers == [.user, .automatic])
     }
 
-    private static let askingApplier = FakeApplier { _, confirm in
-        let accepted = await confirm?(preview("Work", skipped: [Self.missing])) ?? false
-        return accepted ? .applied(report()) : .cancelled(rolledBack: false)
-    }
+    private static let askingApplier: FakeApplier = {
+        let question = preview("Work", skipped: [Self.missing])
+        return FakeApplier(preview: { _ in question }) { _, confirm in
+            let accepted = await confirm?(question) ?? false
+            return accepted ? .applied(report()) : .cancelled(rolledBack: false)
+        }
+    }()
 
     @Test func aHotkeyApplyThatNeedsConfirmationIsPresentedOutsideThePopover() async {
         let work = profile("Work")
@@ -934,8 +960,9 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
     }
 
     @Test func decliningTheConfirmationLeavesTheDockAlone() async {
-        let applier = FakeApplier { _, confirm in
-            let accepted = await confirm?(preview("Work", skipped: [Self.missing])) ?? false
+        let question = preview("Work", skipped: [Self.missing])
+        let applier = FakeApplier(preview: { _ in question }) { _, confirm in
+            let accepted = await confirm?(question) ?? false
             return accepted ? .applied(report()) : .cancelled(rolledBack: false)
         }
         let model = makeModel(applier: applier)
@@ -961,8 +988,9 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
     }
 
     @Test func cancelDeclinesAnOpenQuestionAndStopsTheApply() async {
-        let applier = FakeApplier { _, confirm in
-            let accepted = await confirm?(preview("Work", skipped: [Self.missing])) ?? false
+        let question = preview("Work", skipped: [Self.missing])
+        let applier = FakeApplier(preview: { _ in question }) { _, confirm in
+            let accepted = await confirm?(question) ?? false
             return accepted ? .applied(report()) : .cancelled(rolledBack: false)
         }
         let model = makeModel(applier: applier)

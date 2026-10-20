@@ -87,6 +87,16 @@ private actor FakeSettingsLibrary: ProfileLibrary {
 private actor RecordingApplier: ProfileApplying {
     private(set) var applied: [Profile] = []
 
+    func preview(_ profile: Profile, from source: Profile?, trigger: ApplyTrigger) async throws -> ApplyPreview {
+        ApplyPreview(
+            profileName: profile.name,
+            current: DockState(),
+            target: DockState(),
+            plan: DockPlan(operations: [], summary: ""),
+            skipped: []
+        )
+    }
+
     func apply(
         _ profile: Profile,
         confirm: (@Sendable (ApplyPreview) async -> Bool)?

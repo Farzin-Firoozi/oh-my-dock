@@ -237,18 +237,26 @@ final class MenuBarViewModel {
             // A hotkey is an automatic source: it quits nothing unless the preview is confirmed.
             let trigger: ApplyTrigger = source == .popover ? .user : .automatic
             try gate.requireNoPreview()
-            let result = try await gate.runExclusiveMutation("Applying “\(profile.name)”") {
-                let controlSource: ControlSource = source == .popover ? .menu : .hotkey
-                return try await applier.apply(
-                    profile,
-                    from: previous,
-                    trigger: trigger,
-                    controlSource: controlSource
-                ) { [weak self] preview in
+            let controlSource: ControlSource = source == .popover ? .menu : .hotkey
+            let result = try await gate.runMutationAfterConfirmation(
+                "Applying “\(profile.name)”",
+                preview: {
+                    try await applier.preview(profile, from: previous, trigger: trigger)
+                },
+                confirm: { [weak self] preview in
                     guard let self else { return .cancelled }
                     return await self.requestConfirmation(for: preview)
+                },
+                mutate: { answer in
+                    try await applier.apply(
+                        profile,
+                        from: previous,
+                        trigger: trigger,
+                        controlSource: controlSource,
+                        confirm: { _ in answer }
+                    )
                 }
-            }
+            )
             switch result {
             case let .applied(report):
                 lastAppliedID = profile.id
@@ -269,6 +277,9 @@ final class MenuBarViewModel {
                     ? "\(reason). The previous Dock was restored."
                     : "\(reason). The Dock was not changed.", from: source)
             }
+        } catch is DockOperationGate.ConfirmationDeclined {
+            let reason = confirmationTimedOut ? "Timed out waiting for confirmation" : "Cancelled"
+            show(confirmationTimedOut ? .failure : .success, "\(reason). The Dock was not changed.", from: source)
         } catch {
             show(.failure, describe(error), from: source)
         }

@@ -63,6 +63,46 @@ final class DockOperationGate {
         try await fileLocks.withExclusivePreviewUI(operation)
     }
 
+    func acquirePreviewFileLock() async throws {
+        try await fileLocks.acquireExclusivePreviewSession()
+    }
+
+    func releasePreviewFileLock() {
+        fileLocks.releaseExclusivePreviewSession()
+    }
+
+    /// Serializes profile store writes with the cross-process `operation.lock`.
+    func withExclusiveStoreWrite<T>(
+        _ body: @MainActor () async throws -> T
+    ) async throws -> T {
+        try await fileLocks.withExclusiveOperationUI(timeout: .seconds(180), refuseWhenPreviewHeld: true, body)
+    }
+
+    /// UI mutex through preview and confirmation, then cross-process locks only for `mutate`.
+    func runMutationAfterConfirmation<T>(
+        _ label: String,
+        preview: @MainActor () async throws -> ApplyPreview,
+        confirm: @MainActor (ApplyPreview) async -> ApplyConfirmResult,
+        mutate: @MainActor (ApplyConfirmResult) async throws -> T
+    ) async throws -> T {
+        await acquire(label)
+        defer { release() }
+        let previewValue = try await preview()
+        let answer = await confirm(previewValue)
+        guard answer.accepted else {
+            throw ConfirmationDeclined()
+        }
+        do {
+            return try await fileLocks.withMutationLocksUI(timeout: .seconds(180)) {
+                try await mutate(answer)
+            }
+        } catch OperationLockError.busy(let reason) {
+            throw reason == .previewActive ? PreviewActiveError() : BusyError()
+        }
+    }
+
+    struct ConfirmationDeclined: Error, Equatable {}
+
     private func acquire(_ label: String) async {
         if current == nil {
             current = label
