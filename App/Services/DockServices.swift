@@ -84,8 +84,9 @@ extension ProfileApplying {
 
 extension ProfileApplier: ProfileApplying {}
 
-/// Puts a pending confirmation in front of the user outside the popover (a floating panel), for
-/// applies started by a hotkey while the menu is closed.
+/// Puts what a hotkey apply needs to say in front of the user outside the popover (floating
+/// panels): its confirmation question, how it failed, and what the app switch left behind. A hotkey
+/// apply usually runs with the menu closed, where the popover's banner and sheets can't be seen.
 @MainActor
 protocol ConfirmationPresenting: AnyObject {
     /// Shows `confirmation` through `model`, the one model every UI for this question shares (so a
@@ -94,6 +95,12 @@ protocol ConfirmationPresenting: AnyObject {
     func present(_ confirmation: MenuBarViewModel.Confirmation, model: SwitchConfirmationViewModel)
     /// Takes the panel down because the question was answered elsewhere or timed out.
     func dismiss()
+    /// Tells the user a hotkey apply failed or was refused (`banner.kind == .failure`).
+    func presentNotice(_ banner: MenuBarViewModel.Banner)
+    /// Shows `model`, the app switch's outcome, when it needs the user: apps that would not quit
+    /// or failed to open, with the force-quit choice. Its `onDismiss` ends in `dismissOutcome()`.
+    func presentOutcome(_ model: SwitchOutcomeViewModel)
+    func dismissOutcome()
 }
 
 /// The snapshot an undo would go back to.

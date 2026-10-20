@@ -154,6 +154,9 @@ private final class FakePresenter: ConfirmationPresenting {
     private(set) var presented: [MenuBarViewModel.Confirmation] = []
     private(set) var dismissCount = 0
     private(set) var model: SwitchConfirmationViewModel?
+    private(set) var notices: [MenuBarViewModel.Banner] = []
+    private(set) var outcomes: [SwitchOutcomeViewModel] = []
+    private(set) var dismissOutcomeCount = 0
 
     func present(_ confirmation: MenuBarViewModel.Confirmation, model: SwitchConfirmationViewModel) {
         presented.append(confirmation)
@@ -161,6 +164,12 @@ private final class FakePresenter: ConfirmationPresenting {
     }
 
     func dismiss() { dismissCount += 1 }
+
+    func presentNotice(_ banner: MenuBarViewModel.Banner) { notices.append(banner) }
+
+    func presentOutcome(_ model: SwitchOutcomeViewModel) { outcomes.append(model) }
+
+    func dismissOutcome() { dismissOutcomeCount += 1 }
 
     /// The user clicks Switch (`true`) or Cancel in the panel.
     func userAnswers(_ accepted: Bool) {
@@ -670,6 +679,167 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(await eventually { model.activity == nil })
         #expect(model.confirmation == nil)
         #expect(model.banner?.message.hasPrefix("Applied “Work”") == true)
+    }
+
+    // MARK: Hotkey outcomes outside the popover
+
+    private func hotkeyModel(
+        _ profiles: [Profile] = [],
+        applier: FakeApplier = noApply,
+        presenter: FakePresenter,
+        gate: DockOperationGate = DockOperationGate(),
+        confirmationTimeout: Duration = .seconds(120)
+    ) -> MenuBarViewModel {
+        MenuBarViewModel(
+            library: FakeLibrary(profiles), dock: FakeDockBackend(), applier: applier,
+            undoer: FakeUndoer(), gate: gate, confirmationPresenter: presenter,
+            confirmationTimeout: confirmationTimeout
+        )
+    }
+
+    @Test func aHotkeyRefusedDuringAPrefsPreviewIsFloatedAndKeepsTheBanner() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let gate = DockOperationGate()
+        gate.isPreviewActive = true
+        let applier = FakeApplier { _, _ in .applied(report()) }
+        let model = hotkeyModel([work], applier: applier, presenter: presenter, gate: gate)
+
+        model.applyFromHotkey(profileID: work.id)
+
+        #expect(model.banner == .init(kind: .failure, message: DockOperationGate.previewActiveMessage))
+        #expect(presenter.notices == [.init(kind: .failure, message: DockOperationGate.previewActiveMessage)])
+        #expect(await applier.applied.isEmpty)
+    }
+
+    @Test func aPopoverRefusalDuringAPrefsPreviewIsNotFloated() async {
+        let presenter = FakePresenter()
+        let gate = DockOperationGate()
+        gate.isPreviewActive = true
+        let model = hotkeyModel(presenter: presenter, gate: gate)
+
+        model.apply(profile("Work"))
+
+        #expect(model.banner?.kind == .failure)
+        #expect(presenter.notices.isEmpty)
+    }
+
+    @Test func aHotkeyPressedWhileAnotherChangeRunsIsFloated() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let release = AsyncGate()
+        let applier = FakeApplier { _, _ in
+            await release.wait()
+            return .applied(report())
+        }
+        let model = hotkeyModel([work], applier: applier, presenter: presenter)
+
+        model.apply(work)
+        #expect(await eventually { model.isBusy })
+        model.applyFromHotkey(profileID: work.id)
+
+        let message = "Another Dock change is already running. Try again when it finishes."
+        #expect(model.banner?.message == message)
+        #expect(presenter.notices == [.init(kind: .failure, message: message)])
+        await release.open()
+        #expect(await eventually { model.activity == nil })
+    }
+
+    @Test func aHotkeyForADeletedProfileIsFloated() async {
+        let presenter = FakePresenter()
+        let model = hotkeyModel(presenter: presenter)
+
+        model.applyFromHotkey(profileID: UUID())
+
+        #expect(await eventually { !presenter.notices.isEmpty })
+        #expect(presenter.notices == [.init(kind: .failure, message: "That profile no longer exists.")])
+        #expect(model.banner?.message == "That profile no longer exists.")
+    }
+
+    @Test func aHotkeyApplyErrorIsFloatedButAPopoverApplyErrorIsNot() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let applier = FakeApplier { _, _ in throw ApplyError.dockChanged }
+        let model = hotkeyModel([work], applier: applier, presenter: presenter)
+
+        await model.performApply(work)
+        #expect(presenter.notices.isEmpty)
+        #expect(model.banner?.kind == .failure)
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { presenter.notices.count == 1 })
+        let expected = MenuBarViewModel.Banner(kind: .failure, message: ApplyError.dockChanged.errorDescription ?? "")
+        #expect(presenter.notices == [expected])
+        #expect(model.banner == expected)
+    }
+
+    @Test func aHotkeyConfirmationTimeoutIsFloated() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let model = hotkeyModel(
+            [work], applier: Self.askingApplier, presenter: presenter, confirmationTimeout: .milliseconds(30)
+        )
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.activity == nil && model.banner != nil })
+
+        #expect(presenter.notices.count == 1)
+        #expect(presenter.notices.first?.kind == .failure)
+        #expect(presenter.notices.first?.message.hasPrefix("Timed out waiting for confirmation") == true)
+    }
+
+    @Test func aHotkeyApplyThatSucceedsOrIsCancelledStaysQuiet() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let model = hotkeyModel([work], applier: FakeApplier { _, _ in .applied(report()) }, presenter: presenter)
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.banner != nil })
+        #expect(presenter.notices.isEmpty)
+        #expect(presenter.outcomes.isEmpty)
+    }
+
+    private func strandedOutcome() -> SwitchOutcome {
+        let slack = RunningAppInfo(processIdentifier: 7, bundleId: "com.example.slack", name: "Slack")
+        return SwitchOutcome(quits: [QuitResult(app: slack, status: .refused)])
+    }
+
+    private func appliedWithStragglers() -> FakeApplier {
+        let outcome = strandedOutcome()
+        return FakeApplier { _, _ in
+            .applied(ApplyReport(
+                plan: DockPlan(operations: [], summary: ""), snapshotID: UUID(), skipped: [],
+                clearsRecentApps: false, restarted: true, switchOutcome: outcome
+            ))
+        }
+    }
+
+    @Test func aHotkeyApplyWithStragglersFloatsTheOutcomeAndDismissesItWithTheSheet() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let model = hotkeyModel([work], applier: appliedWithStragglers(), presenter: presenter)
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { !presenter.outcomes.isEmpty })
+
+        // The popover keeps its own sheet; both show the same outcome.
+        #expect(presenter.outcomes.first === model.outcomeViewModel)
+        #expect(model.showsOutcomeSheet)
+        #expect(presenter.outcomes.first?.stragglers.map(\.app.name) == ["Slack"])
+
+        presenter.outcomes.first?.dismiss()
+        #expect(!model.showsOutcomeSheet)
+        #expect(presenter.dismissOutcomeCount == 1)
+    }
+
+    @Test func aPopoverApplyWithStragglersUsesOnlyThePopoverSheet() async {
+        let presenter = FakePresenter()
+        let model = hotkeyModel(applier: appliedWithStragglers(), presenter: presenter)
+
+        await model.performApply(profile("Work"))
+
+        #expect(model.showsOutcomeSheet)
+        #expect(presenter.outcomes.isEmpty)
     }
 
     @Test func aPopoverApplyDoesNotOpenAnAlert() async {

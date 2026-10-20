@@ -205,14 +205,14 @@ final class MenuBarViewModel {
     /// The hotkey entry point. Applies the latest stored version of the profile, not the copy the
     /// hotkey was registered with, and says so when it can't run.
     func applyFromHotkey(profileID: UUID) {
-        guard !previewBlocksDockChange() else { return }
+        guard !previewBlocksDockChange(from: .hotkey) else { return }
         guard !isBusy else {
-            show(.failure, "Another Dock change is already running. Try again when it finishes.")
+            show(.failure, "Another Dock change is already running. Try again when it finishes.", from: .hotkey)
             return
         }
         operation = Task {
             guard let latest = await library.profiles().first(where: { $0.id == profileID }) else {
-                show(.failure, "That profile no longer exists.")
+                show(.failure, "That profile no longer exists.", from: .hotkey)
                 return
             }
             await performApply(latest, source: .hotkey)
@@ -220,9 +220,9 @@ final class MenuBarViewModel {
     }
 
     func performApply(_ profile: Profile, source: ApplySource = .popover) async {
-        guard !previewBlocksDockChange() else { return }
+        guard !previewBlocksDockChange(from: source) else { return }
         guard !isBusy else {
-            if source == .hotkey { show(.failure, "Another Dock change is already running. Try again when it finishes.") }
+            if source == .hotkey { show(.failure, "Another Dock change is already running. Try again when it finishes.", from: source) }
             return
         }
         activity = .applying(profileName: profile.name)
@@ -248,30 +248,12 @@ final class MenuBarViewModel {
                 lastAppliedID = profile.id
                 show(.success, appliedMessage(profile.name, report: report))
                 if let outcome = report.switchOutcome {
-                    self.latestOutcome = outcome
-                    self.outcomeViewModel = SwitchOutcomeViewModel(
-                        outcome: outcome,
-                        options: profile.switching,
-                        switcher: self.appSwitcher,
-                        onDismiss: { [weak self] in self?.showsOutcomeSheet = false }
-                    )
-                    if !outcome.stragglers.isEmpty || !outcome.launchFailures.isEmpty {
-                        self.showsOutcomeSheet = true
-                    }
+                    showOutcome(outcome, for: profile, from: source)
                 }
             case let .appsOnly(outcome):
                 lastAppliedID = profile.id
                 show(.success, "“\(profile.name)” is already on the Dock. " + appsMessage(outcome))
-                self.latestOutcome = outcome
-                self.outcomeViewModel = SwitchOutcomeViewModel(
-                    outcome: outcome,
-                    options: profile.switching,
-                    switcher: self.appSwitcher,
-                    onDismiss: { [weak self] in self?.showsOutcomeSheet = false }
-                )
-                if !outcome.stragglers.isEmpty || !outcome.launchFailures.isEmpty {
-                    self.showsOutcomeSheet = true
-                }
+                showOutcome(outcome, for: profile, from: source)
             case .noChanges:
                 lastAppliedID = profile.id
                 show(.success, "“\(profile.name)” is already on the Dock.")
@@ -279,12 +261,32 @@ final class MenuBarViewModel {
                 let reason = confirmationTimedOut ? "Timed out waiting for confirmation" : "Cancelled"
                 show(confirmationTimedOut ? .failure : .success, rolledBack
                     ? "\(reason). The previous Dock was restored."
-                    : "\(reason). The Dock was not changed.")
+                    : "\(reason). The Dock was not changed.", from: source)
             }
         } catch {
-            show(.failure, describe(error))
+            show(.failure, describe(error), from: source)
         }
         await refresh()
+    }
+
+    /// Keeps the outcome for the popover and, when something needs the user (apps that would not
+    /// quit, apps that failed to open), shows it there; a hotkey apply also floats it, since the
+    /// popover is probably closed.
+    private func showOutcome(_ outcome: SwitchOutcome, for profile: Profile, from source: ApplySource) {
+        latestOutcome = outcome
+        let viewModel = SwitchOutcomeViewModel(
+            outcome: outcome,
+            options: profile.switching,
+            switcher: appSwitcher,
+            onDismiss: { [weak self] in
+                self?.showsOutcomeSheet = false
+                self?.confirmationPresenter?.dismissOutcome()
+            }
+        )
+        outcomeViewModel = viewModel
+        guard !outcome.stragglers.isEmpty || !outcome.launchFailures.isEmpty else { return }
+        showsOutcomeSheet = true
+        if source == .hotkey { confirmationPresenter?.presentOutcome(viewModel) }
     }
 
     private func appliedMessage(_ name: String, report: ApplyReport) -> String {
@@ -474,16 +476,20 @@ final class MenuBarViewModel {
     // MARK: Banner
 
     /// While a Dock preferences preview is on the Dock, applies and undo are refused with a message.
-    private func previewBlocksDockChange() -> Bool {
+    private func previewBlocksDockChange(from source: ApplySource = .popover) -> Bool {
         guard gate.isPreviewActive else { return false }
-        show(.failure, DockOperationGate.previewActiveMessage)
+        show(.failure, DockOperationGate.previewActiveMessage, from: source)
         return true
     }
 
     func dismissBanner() { banner = nil }
 
-    private func show(_ kind: Banner.Kind, _ message: String) {
-        banner = Banner(kind: kind, message: message)
+    /// Puts `message` in the popover's banner. A failure of a hotkey apply is also floated, because
+    /// the popover is closed when a hotkey is pressed and nobody would see the banner.
+    private func show(_ kind: Banner.Kind, _ message: String, from source: ApplySource = .popover) {
+        let banner = Banner(kind: kind, message: message)
+        self.banner = banner
+        if source == .hotkey, kind == .failure { confirmationPresenter?.presentNotice(banner) }
     }
 
     private func describe(_ error: any Error) -> String {
