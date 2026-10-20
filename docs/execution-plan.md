@@ -107,18 +107,73 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 
 ## Phase 5: v0.3 (M3)
 
-**Scope change:** all automatic triggers (engine, display/schedule/frontmost, Wi-Fi, Focus Filter) are postponed to a later release. v0.3 ships App Intents, the `ohmydock://` URL scheme, and the CLI.
+**Scope:** external control only. The spec is [external-control-design.md](external-control-design.md). Automatic triggers stay postponed and are not tasks: trigger engine, display, schedule, frontmost app, Wi-Fi, and Focus Filter (`SetFocusFilterIntent`).
 
-| # | Task | Model | Group |
-|---|---|---|---|
-| 5.1 | **Postponed.** **`TriggerEngine`**: rules, debounce, priority, "no quit from automatic triggers" | **Sol** | A |
-| 5.2 | **Postponed.** Triggers: display, schedule, frontmost app (throttled) | Grok | B |
-| 5.3 | App Intents (apply/save/list). **Focus Filter (`SetFocusFilterIntent`) postponed with the triggers** | Sonnet | B |
-| 5.4 | **Postponed.** Wi-Fi trigger (CoreWLAN + Location permission flow) | Flash-H | B |
-| 5.5 | URL scheme `ohmydock://` | Flash-L | B |
-| 5.6 | `ohmydock` CLI (swift-argument-parser) + app handoff | Composer | B |
-| 5.7 | Cask `binary` stanza for the CLI | Flash-L | C |
-| 5.R | Review: Grok (5.1, 5.3–5.7), Sol (all except 5.1) · Verify: Terra | Sol + Grok + Composer | D |
+**Models for this phase only:** build tasks are **composer-2.5**. Review and verify are **grok-4.7**. The tier table and the Sol/Terra review rule do not apply here. The model-mix totals at the bottom of this file are not updated for these rows.
+
+**Done when:** `make test` and `make build` are green, `verify-release` passes on the built app, and the CLI, URL scheme, and App Intents match the design. No live Dock and no `killall Dock`.
+
+Groups run in order. Tasks in one group can run in parallel in separate worktrees; their files do not overlap. Acceptance and tests below are the dispatch contract; the design doc is the behavior contract.
+
+| # | Task | Model | Group | Depends |
+|---|---|---|---|---|
+| 5.A | Core `ExternalCommand` layer, `fcntl` locks, snapshot `source` tag, app gate/watcher | composer-2.5 | A | — |
+| 5.B | `ohmydock://` URL scheme, consent setting, x-callback-url | composer-2.5 | B | 5.A |
+| 5.C | `ohmydock` CLI (swift-argument-parser), headless, embedded in the app | composer-2.5 | B | 5.A |
+| 5.D | App Intents: apply, save, list, undo | composer-2.5 | C | 5.A, 5.B |
+| 5.E | Packaging: sign, verify-release, cask `binary` / man page, completions | composer-2.5 | C | 5.C |
+| 5.F | Docs: `docs/agents.md` and the pointers the design lists | composer-2.5 | D | 5.A–5.E |
+| 5.R | Review all of 5.A–5.F and run `make test`, `make build`, `verify-release` | grok-4.7 | E | 5.A–5.F |
+
+### 5.A — Command center, locks, source
+
+**Files:** `Packages/OhMyDockCore/Sources/OhMyDockCore/External/`; `Snapshot` / `SnapshotStore.save` and `restore`; `ProfileApplier.apply` (`controlSource`); move `ActiveProfileRecord`, `SpentUndoRecord`, and `SnapshotUndoService` into the package. App: `DockOperationGate` takes `operation.lock`; prefs preview holds `preview.lock`; `StoreChangeWatcher`; menu bar passes `.menu` / `.hotkey`; editor reload-or-conflict when a profile file changes.
+
+**Acceptance:** Fakes cover the command and exit tables in the design (§3, §4), including quit requiring both `--allow-quit` and `--yes`, idempotent `noChanges`, `--quit-scope` not persisted, preview-lock exit 7, lock timeout 0, source tag on new snapshots, old snapshots still decoding, URL vs intent confirmation policy, and `OHMYDOCK_DOCK_PLIST` refused when it is the live plist. `fcntl` releases when the holder dies.
+
+**Tests:** `OhMyDockCoreTests/External/` and app unit tests for the gate, watcher, and policy. No live Dock.
+
+### 5.B — URL scheme
+
+**Files:** `App/Info.plist`, `App/URL/`, `App/OhMyDockApp.swift`, `AppDelegate.swift`, Settings toggle for `externalControl`. Not `project.yml` or `CLI/`.
+
+**Acceptance:** Routes in design §5. `import?url=` does not fetch. Forbidden quit query names and an `https` callback write nothing. Duplicate URL within 1s does not apply twice. Denied setting blocks mutating URLs and still allows `open`. First-use consent defaults to Allow. Quit URLs show the sheet before any quit. Snapshot source `url`.
+
+**Tests:** Router tests with a fake command center and a fake URL opener. No app launch.
+
+### 5.C — CLI
+
+**Files:** `CLI/`, `project.yml` (tool target, `swift-argument-parser` from 1.5.0, embed into `Contents/Helpers/ohmydock`), `Makefile` `cli` target. Behavior stays in 5.A; this task is the shell.
+
+**Acceptance:** Every §3 command. Global flags before or after the subcommand. Usage exits 2, not 64. `--json` / `--quiet` rules. Debug app build contains `Contents/Helpers/ohmydock`. `scripts/cli-smoke.sh` uses a temp support dir and a temp plist file, asserts `schemaVersion`, and fails if the live Dock plist mtime changes.
+
+**Tests:** smoke script. No live Dock, no `killall`, no app launch.
+
+### 5.D — App Intents
+
+**Files:** `App/Intents/` only (`ApplyProfileIntent`, `SaveCurrentDockIntent`, `ListProfilesIntent`, `UndoLastChangeIntent`, `ProfileEntity`, `OhMyDockShortcuts`).
+
+**Acceptance:** Design §6. Apply takes a profile entity id. Undo confirms first. Preview-active fails the dialog without writing. Snapshot source `intent`. No Focus Filter intent.
+
+**Tests:** `perform()` against a fake center in `OhMyDockTests`. No app launch.
+
+### 5.E — Packaging
+
+**Files:** `scripts/release.sh`, `scripts/verify-release.sh`, `scripts/test-verify-release.sh`, `CLI/ohmydock.1`, `ThirdParty/swift-argument-parser/LICENSE`, `THIRD_PARTY_NOTICES.md`, `packaging/homebrew-tap/Casks/oh-my-dock.rb`, `packaging/homebrew-tap/test-cask.sh`, `OhMyDockCore.version`.
+
+**Acceptance:** Sign `dockutil`, then `ohmydock`, then the app (`--options runtime`). `verify-release.sh` stays 7 checks and covers the CLI, the MIT license, and the `ohmydock` URL scheme. Cask `binary` points at `Contents/Helpers/ohmydock` and `manpage` at `OhMyDock.app/Contents/Resources/ohmydock.1`. `zsh -n` accepts `ohmydock completions zsh`.
+
+**Tests:** `test-verify-release.sh`, `test-cask.sh`. Do not install the cask onto the live Dock.
+
+### 5.F — Docs
+
+**Files:** `docs/agents.md` (design §8, including the paste-in snippet and the future MCP tool list), plus the index and pointer edits listed in the design (README, distribution, features, technical-notes, implementation-plan M3). No code.
+
+**Acceptance:** An agent can follow `docs/agents.md` without reading the design, and the doc tells them never to pass `--allow-quit` unless the user agreed.
+
+### 5.R — Review and verify
+
+**Model:** grok-4.7 reviews 5.A–5.F (quit flags, URL rejection, lock order, preview lock, import not fetching, live-plist refusal), then runs `make test`, `make build`, and `verify-release` on the built app. No live Dock and no `killall Dock`.
 
 ## Phase 6: v0.4+ (M4)
 
