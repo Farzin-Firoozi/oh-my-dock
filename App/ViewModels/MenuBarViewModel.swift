@@ -50,11 +50,14 @@ final class MenuBarViewModel {
         }
     }
 
-    /// Where an apply was started from. A hotkey apply may run while the popover is closed, so a
-    /// question it raises is also put in front of the user by the `ConfirmationPresenting` hook.
+    /// Where an apply was started from. A hotkey or editor apply may run while the popover is closed,
+    /// so a question it raises is also put in front of the user by the `ConfirmationPresenting` hook.
     enum ApplySource: Equatable {
         case popover
         case hotkey
+        case editor
+
+        var floatsPrompts: Bool { self != .popover }
     }
 
     enum Activity: Equatable {
@@ -204,25 +207,30 @@ final class MenuBarViewModel {
 
     /// The hotkey entry point. Applies the latest stored version of the profile, not the copy the
     /// hotkey was registered with, and says so when it can't run.
-    func applyFromHotkey(profileID: UUID) {
-        guard !previewBlocksDockChange(from: .hotkey) else { return }
+    func applyFromHotkey(profileID: UUID) { applyLatest(profileID: profileID, source: .hotkey) }
+
+    /// The editor's Activate button: a user action like the popover click, with prompts floated.
+    func applyFromEditor(profileID: UUID) { applyLatest(profileID: profileID, source: .editor) }
+
+    private func applyLatest(profileID: UUID, source: ApplySource) {
+        guard !previewBlocksDockChange(from: source) else { return }
         guard !isBusy else {
-            show(.failure, "Another Dock change is already running. Try again when it finishes.", from: .hotkey)
+            show(.failure, "Another Dock change is already running. Try again when it finishes.", from: source)
             return
         }
         operation = Task {
             guard let latest = await library.profiles().first(where: { $0.id == profileID }) else {
-                show(.failure, "That profile no longer exists.", from: .hotkey)
+                show(.failure, "That profile no longer exists.", from: source)
                 return
             }
-            await performApply(latest, source: .hotkey)
+            await performApply(latest, source: source)
         }
     }
 
     func performApply(_ profile: Profile, source: ApplySource = .popover) async {
         guard !previewBlocksDockChange(from: source) else { return }
         guard !isBusy else {
-            if source == .hotkey { show(.failure, "Another Dock change is already running. Try again when it finishes.", from: source) }
+            if source.floatsPrompts { show(.failure, "Another Dock change is already running. Try again when it finishes.", from: source) }
             return
         }
         activity = .applying(profileName: profile.name)
@@ -235,9 +243,9 @@ final class MenuBarViewModel {
             // The profile on the Dock now scopes which apps may be quit (the previous profile's).
             let previous = profiles.first { $0.id == (activeProfileID ?? lastAppliedID) && $0.id != profile.id }
             // A hotkey is an automatic source: it quits nothing unless the preview is confirmed.
-            let trigger: ApplyTrigger = source == .popover ? .user : .automatic
+            let trigger: ApplyTrigger = source == .hotkey ? .automatic : .user
             try gate.requireNoPreview()
-            let controlSource: ControlSource = source == .popover ? .menu : .hotkey
+            let controlSource: ControlSource = source == .hotkey ? .hotkey : .menu
             let result = try await gate.runMutationAfterConfirmation(
                 "Applying “\(profile.name)”",
                 preview: {
@@ -306,7 +314,7 @@ final class MenuBarViewModel {
         outcomeViewModel = viewModel
         guard !outcome.stragglers.isEmpty || !outcome.launchFailures.isEmpty else { return }
         showsOutcomeSheet = true
-        if source == .hotkey { confirmationPresenter?.presentOutcome(viewModel) }
+        if source.floatsPrompts { confirmationPresenter?.presentOutcome(viewModel) }
     }
 
     private func appliedMessage(_ name: String, report: ApplyReport) -> String {
@@ -352,7 +360,7 @@ final class MenuBarViewModel {
                 confirmationModel = model
                 // Nobody may be looking at the popover (a hotkey apply with the menu closed), so
                 // hand the question to the presenter too, and never wait forever.
-                if applySource == .hotkey {
+                if applySource.floatsPrompts {
                     confirmationPresenter?.present(question, model: model)
                 }
                 confirmationTimeoutTask = Task { [weak self, confirmationTimeout] in
@@ -513,7 +521,7 @@ final class MenuBarViewModel {
     private func show(_ kind: Banner.Kind, _ message: String, from source: ApplySource = .popover) {
         let banner = Banner(kind: kind, message: message)
         self.banner = banner
-        if source == .hotkey, kind == .failure { confirmationPresenter?.presentNotice(banner) }
+        if source.floatsPrompts, kind == .failure { confirmationPresenter?.presentNotice(banner) }
     }
 
     private func describe(_ error: any Error) -> String {

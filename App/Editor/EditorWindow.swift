@@ -26,6 +26,7 @@ struct EditorWindow: View {
     @State private var tab: Tab = .layout
     @State private var departure: Departure?
     private let quit: PreviewQuitCoordinator
+    private let activate: (UUID) -> Void
     @AppStorage(MockupSettingsStore.plainStripKey) private var plainStrip = false
 
     /// The store is the app-wide `ProfileStore`, so editor edits and other writers see the same files.
@@ -35,9 +36,11 @@ struct EditorWindow: View {
         previewer: any DockPrefsPreviewing,
         gate: DockOperationGate,
         profileStoreChanges: DockChangeSignal,
-        quit: PreviewQuitCoordinator
+        quit: PreviewQuitCoordinator,
+        activate: @escaping (UUID) -> Void
     ) {
         self.quit = quit
+        self.activate = activate
         let editor = EditorViewModel(store: store, gate: gate, storeChanges: profileStoreChanges)
         _model = State(initialValue: editor)
         _panel = State(initialValue: PrefsPanelViewModel(
@@ -126,6 +129,12 @@ struct EditorWindow: View {
                         Text("Dock Preferences").tag(Tab.preferences)
                     }
                     .pickerStyle(.segmented)
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button { activate(profile.id) } label: {
+                        Label("Activate", systemImage: "play.fill")
+                    }
+                    .help("Apply this profile to your Dock")
                 }
                 if tab == .layout {
                     ToolbarItem(placement: .primaryAction) {

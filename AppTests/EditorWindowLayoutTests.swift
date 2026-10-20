@@ -65,7 +65,8 @@ private func hostEditor(plainStrip: Bool) async -> NSWindow {
         previewer: LayoutFakePreviewer(),
         gate: DockOperationGate(),
         profileStoreChanges: DockChangeSignal(),
-        quit: PreviewQuitCoordinator()
+        quit: PreviewQuitCoordinator(),
+        activate: { _ in }
     )
     let host = NSHostingController(rootView: view)
     let window = NSWindow(

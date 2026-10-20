@@ -44,7 +44,8 @@ struct OhMyDockApp: App {
                 previewer: shell.prefsPreviewer,
                 gate: shell.gate,
                 profileStoreChanges: shell.profileStoreChanges,
-                quit: shell.previewQuit
+                quit: shell.previewQuit,
+                activate: { shell.menuBar.applyFromEditor(profileID: $0) }
             )
         }
         .defaultSize(width: 900, height: 600)
