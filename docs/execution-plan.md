@@ -103,6 +103,8 @@ No Apple Developer account and none planned, so releases are **ad-hoc signed and
 | 4.F | Phase 4 fix round: Reset removes keys instead of guessed defaults; block apply/undo/restore during a prefs preview; revert preview on quit; AppKit quit/launch on the main thread | Sonnet | B |
 | 4.R | Review: Sol (all; focus data loss in 4.3), Grok (all except 4.5; second opinion) · Verify: Terra | Sol + Grok + Composer | C |
 
+**Phase 4 status: done.** 4.R ran as Grok review → Sonnet/Composer fixes (shared confirmation model, preview active from first write, floating hotkey failures, editor layout-loop crash) → Composer verification, then manual QA on the live Dock (prefs preview/revert, app switching with Keep running, undo) passed. Known gap: the mockup wallpaper uses `NSWorkspace.desktopImageURL`, which returns a stand-in image for aerial and many modern wallpapers; reading `com.apple.wallpaper/Store/Index.plist` is deferred.
+
 ## Phase 5: v0.3 (M3)
 
 | # | Task | Model | Group |
