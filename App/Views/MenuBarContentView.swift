@@ -8,9 +8,10 @@ struct MenuBarContentView: View {
     var updates: UpdateViewModel
     @Environment(\.openWindow) private var openWindow
     @FocusState private var nameFieldFocused: Bool
-    /// What the diff sheet shows. Copied when the sheet opens and kept until it has closed, so the
-    /// content doesn't vanish mid-dismissal when applying clears the model's confirmation.
-    @State private var sheetPreview: ApplyPreview?
+    /// What the diff sheet shows. Built when the sheet opens and kept until it has closed, so the
+    /// content doesn't vanish mid-dismissal when applying clears the model's confirmation. It wraps
+    /// the question's shared `SwitchConfirmationViewModel`, so exclusions made here carry over.
+    @State private var sheetModel: DiffSheetViewModel?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -19,11 +20,17 @@ struct MenuBarContentView: View {
             if let confirmation = model.confirmation {
                 ConfirmationCard(
                     confirmation: confirmation,
+                    // Apps the user chose to keep running (in the panel or the diff sheet) drop off the list.
+                    quitApps: model.confirmationModel.map { $0.willQuitApps.map(\.name) } ?? confirmation.quitApps,
                     onReviewDiff: {
-                        sheetPreview = confirmation.preview
+                        sheetModel = confirmation.preview.map {
+                            DiffSheetViewModel(preview: $0, switchConfirmation: model.confirmationModel)
+                        }
                         model.showsDiffSheet = true
-                    }
-                ) { model.resolveConfirmation($0) }
+                    },
+                    onApply: { model.confirmationModel?.switchAction() },
+                    onCancel: { model.resolveConfirmation(.cancelled) }
+                )
             } else if let activity = model.activity {
                 ActivityCard(activity: activity, canCancel: model.confirmation == nil) {
                     model.cancelOperation()
@@ -53,10 +60,10 @@ struct MenuBarContentView: View {
         }
         .padding(14)
         .frame(width: 320)
-        .sheet(isPresented: $model.showsDiffSheet, onDismiss: { sheetPreview = nil }) {
-            if let preview = sheetPreview {
+        .sheet(isPresented: $model.showsDiffSheet, onDismiss: { sheetModel = nil }) {
+            if let sheetModel {
                 DiffSheetView(
-                    preview: preview,
+                    model: sheetModel,
                     onApply: { (result: ApplyConfirmResult) in model.resolveConfirmation(result) },
                     // Back to the confirmation card; declining happens only on the card's Cancel.
                     onCancel: { model.cancelDiffSheet() }
@@ -352,8 +359,11 @@ private struct ActivityCard: View {
 
 private struct ConfirmationCard: View {
     let confirmation: MenuBarViewModel.Confirmation
+    /// The apps that will still be quit once the user's exclusions are applied.
+    let quitApps: [String]
     var onReviewDiff: () -> Void = {}
-    let answer: (Bool) -> Void
+    let onApply: () -> Void
+    let onCancel: () -> Void
 
     var body: some View {
         Card {
@@ -369,8 +379,8 @@ private struct ConfirmationCard: View {
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                 }
-                if !confirmation.quitApps.isEmpty {
-                    Text("Will quit: \(confirmation.quitApps.joined(separator: ", ")). Apps with unsaved work may ask to save; Undo will not reopen them.")
+                if !quitApps.isEmpty {
+                    Text("Will quit: \(quitApps.joined(separator: ", ")). Apps with unsaved work may ask to save; Undo will not reopen them.")
                         .font(.callout)
                         .fixedSize(horizontal: false, vertical: true)
                 }
@@ -385,14 +395,14 @@ private struct ConfirmationCard: View {
                         .foregroundStyle(.secondary)
                 }
                 HStack {
-                    Button("Cancel") { answer(false) }
+                    Button("Cancel", action: onCancel)
                         .keyboardShortcut(.cancelAction)
                     Spacer()
                     if confirmation.preview != nil {
                         Button("Review Changes…") { onReviewDiff() }
                             .controlSize(.small)
                     }
-                    Button(confirmation.skippedApps.isEmpty ? "Apply" : "Apply Anyway") { answer(true) }
+                    Button(confirmation.skippedApps.isEmpty ? "Apply" : "Apply Anyway", action: onApply)
                         .keyboardShortcut(.defaultAction)
                 }
             }

@@ -84,29 +84,16 @@ extension ProfileApplying {
 
 extension ProfileApplier: ProfileApplying {}
 
-/// Puts a pending confirmation in front of the user outside the popover (an alert), for applies
-/// started by a hotkey while the menu is closed.
+/// Puts a pending confirmation in front of the user outside the popover (a floating panel), for
+/// applies started by a hotkey while the menu is closed.
 @MainActor
 protocol ConfirmationPresenting: AnyObject {
-    /// Shows `confirmation`; calls `answer` when the user picks. Calls after `dismiss()` are ignored.
-    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (ApplyConfirmResult) -> Void)
-    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void)
-    /// Takes the alert down because the question was answered elsewhere or timed out.
+    /// Shows `confirmation` through `model`, the one model every UI for this question shares (so a
+    /// per-app exclusion made anywhere is honoured wherever the user accepts). Answers go through
+    /// the model's `onConfirm`; there is no separate callback.
+    func present(_ confirmation: MenuBarViewModel.Confirmation, model: SwitchConfirmationViewModel)
+    /// Takes the panel down because the question was answered elsewhere or timed out.
     func dismiss()
-}
-
-extension ConfirmationPresenting {
-    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (ApplyConfirmResult) -> Void) {
-        present(confirmation) { accepted in
-            answer(ApplyConfirmResult(accepted: accepted))
-        }
-    }
-
-    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void) {
-        present(confirmation) { (result: ApplyConfirmResult) in
-            answer(result.accepted)
-        }
-    }
 }
 
 /// The snapshot an undo would go back to.

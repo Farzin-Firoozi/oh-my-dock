@@ -207,3 +207,25 @@ public final class SwitchConfirmationViewModel: Identifiable {
         onConfirm(ApplyConfirmResult.cancelled)
     }
 }
+
+extension SwitchConfirmationViewModel {
+    /// The model behind one pending question. Without a `switchPlan` (a question that only lists
+    /// missing apps) the plan is rebuilt from the names the question carries.
+    convenience init(
+        confirmation: MenuBarViewModel.Confirmation,
+        onConfirm: @escaping (ApplyConfirmResult) -> Void
+    ) {
+        let plan = confirmation.preview?.switchPlan ?? SwitchPlan(
+            scope: .previousProfileApps,
+            willQuit: confirmation.quitApps.map { RunningAppInfo(processIdentifier: 0, bundleId: $0, name: $0) },
+            willLaunch: confirmation.launchApps.map { LaunchRequest(bundleId: $0, name: $0) }
+        )
+        self.init(
+            plan: plan,
+            profileName: confirmation.profileName,
+            skippedApps: confirmation.skippedApps,
+            clearsRecentApps: confirmation.clearsRecentApps,
+            onConfirm: onConfirm
+        )
+    }
+}

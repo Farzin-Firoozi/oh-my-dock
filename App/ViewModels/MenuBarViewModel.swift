@@ -70,6 +70,9 @@ final class MenuBarViewModel {
     private(set) var undoTarget: UndoTarget?
     private(set) var activity: Activity?
     private(set) var confirmation: Confirmation?
+    /// The one model behind the open question. The floating panel, the popover card and the diff
+    /// sheet all read and write per-app exclusions here, so accepting from any of them sends the same set.
+    private(set) var confirmationModel: SwitchConfirmationViewModel?
     private(set) var banner: Banner?
     var isNamingProfile = false
     var newProfileName = ""
@@ -320,13 +323,15 @@ final class MenuBarViewModel {
                     quitApps: preview.willQuitApps.map(\.name),
                     launchApps: (preview.switchPlan?.willLaunch ?? []).map(\.name)
                 )
+                let model = SwitchConfirmationViewModel(confirmation: question) { [weak self] result in
+                    self?.resolveConfirmation(result, token: token)
+                }
                 confirmation = question
+                confirmationModel = model
                 // Nobody may be looking at the popover (a hotkey apply with the menu closed), so
                 // hand the question to the presenter too, and never wait forever.
                 if applySource == .hotkey {
-                    confirmationPresenter?.present(question) { [weak self] (result: ApplyConfirmResult) in
-                        self?.resolveConfirmation(result, token: token)
-                    }
+                    confirmationPresenter?.present(question, model: model)
                 }
                 confirmationTimeoutTask = Task { [weak self, confirmationTimeout] in
                     try? await Task.sleep(for: confirmationTimeout)
@@ -340,8 +345,14 @@ final class MenuBarViewModel {
     }
 
     /// Answers the open question. With a `token`, only if that question is still the open one.
-    func resolveConfirmation(_ result: ApplyConfirmResult, token: Int? = nil) {
+    /// An accepted answer always carries the shared model's exclusions, whichever UI sent it.
+    func resolveConfirmation(_ answer: ApplyConfirmResult, token: Int? = nil) {
         if let token, token != confirmationToken { return }
+        var result = answer
+        if result.accepted, let model = confirmationModel {
+            result.excludedBundleIDs.formUnion(model.excludedBundleIDs)
+        }
+        confirmationModel = nil
         showsDiffSheet = false
         confirmationTimeoutTask?.cancel()
         confirmationTimeoutTask = nil
@@ -350,10 +361,6 @@ final class MenuBarViewModel {
         confirmation = nil
         if continuation != nil { confirmationPresenter?.dismiss() }
         continuation?.resume(returning: result)
-    }
-
-    func resolveConfirmation(_ accepted: Bool, token: Int? = nil) {
-        resolveConfirmation(ApplyConfirmResult(accepted: accepted), token: token)
     }
 
     private func expireConfirmation(token: Int) {

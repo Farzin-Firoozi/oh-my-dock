@@ -204,13 +204,15 @@ public final class DiffSheetViewModel {
 
     // MARK: - Initializer
 
-    public init(preview: ApplyPreview) {
+    /// `switchConfirmation` is the model of the open question, when there is one: the sheet then
+    /// edits the same per-app exclusions the other confirmation UIs read, instead of its own copy.
+    public init(preview: ApplyPreview, switchConfirmation: SwitchConfirmationViewModel? = nil) {
         self.preview = preview
         self.profileName = preview.profileName
         self.summary = preview.plan.summary
 
         if let plan = preview.switchPlan, (!plan.willQuit.isEmpty || !plan.willLaunch.isEmpty || !plan.willKeep.isEmpty || !plan.protected.isEmpty) {
-            self.switchConfirmationViewModel = SwitchConfirmationViewModel(
+            self.switchConfirmationViewModel = switchConfirmation ?? SwitchConfirmationViewModel(
                 plan: plan,
                 profileName: preview.profileName,
                 skippedApps: preview.skipped.map { $0.app.name.isEmpty ? $0.app.bundleId : $0.app.name },

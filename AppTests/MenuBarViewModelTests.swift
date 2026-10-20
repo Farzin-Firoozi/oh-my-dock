@@ -41,6 +41,8 @@ private actor FakeApplier: ProfileApplying {
     private(set) var applied: [Profile] = []
     private(set) var triggers: [ApplyTrigger] = []
     private(set) var sources: [String?] = []
+    /// What the user's answer was, exclusions included, for every question asked.
+    private(set) var answers: [ApplyConfirmResult] = []
     private var script: Script
 
     init(_ script: @escaping Script) { self.script = script }
@@ -49,6 +51,8 @@ private actor FakeApplier: ProfileApplying {
         triggers.append(trigger)
         sources.append(source)
     }
+
+    func record(answer: ApplyConfirmResult) { answers.append(answer) }
 
     func apply(
         _ profile: Profile,
@@ -81,6 +85,7 @@ extension FakeApplier {
         if let confirm {
             boolConfirm = { (preview: ApplyPreview) async -> Bool in
                 let res = await confirm(preview)
+                await self.record(answer: res)
                 return res.accepted
             }
         } else {
@@ -148,16 +153,19 @@ private actor SlowFirstLibrary: ProfileLibrary {
 private final class FakePresenter: ConfirmationPresenting {
     private(set) var presented: [MenuBarViewModel.Confirmation] = []
     private(set) var dismissCount = 0
-    private var answer: (@MainActor (Bool) -> Void)?
+    private(set) var model: SwitchConfirmationViewModel?
 
-    func present(_ confirmation: MenuBarViewModel.Confirmation, answer: @escaping @MainActor (Bool) -> Void) {
+    func present(_ confirmation: MenuBarViewModel.Confirmation, model: SwitchConfirmationViewModel) {
         presented.append(confirmation)
-        self.answer = answer
+        self.model = model
     }
 
     func dismiss() { dismissCount += 1 }
 
-    func userAnswers(_ accepted: Bool) { answer?(accepted) }
+    /// The user clicks Switch (`true`) or Cancel in the panel.
+    func userAnswers(_ accepted: Bool) {
+        if accepted { model?.switchAction() } else { model?.cancelAction() }
+    }
 }
 
 // MARK: - Helpers
@@ -461,7 +469,7 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(await eventually { model.confirmation != nil })
         #expect(model.confirmation == .init(profileName: "Work", skippedApps: ["Gone"], clearsRecentApps: true))
 
-        model.resolveConfirmation(true)
+        model.resolveConfirmation(.accepted)
         #expect(await eventually { model.activity == nil })
 
         #expect(model.confirmation == nil)
@@ -502,12 +510,130 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(model.confirmation?.quitApps == ["Slack"])
         #expect(model.confirmation?.launchApps == ["Figma"])
 
-        model.resolveConfirmation(true)
+        model.resolveConfirmation(.accepted)
         #expect(await eventually { model.activity == nil })
         let message = model.banner?.message ?? ""
         #expect(message.hasPrefix("Applied “Work”."))
         #expect(message.contains("Quit 1"))
         #expect(message.contains("quit apps are not reopened"))
+    }
+
+    /// Slack and Figma would both be quit; the user keeps Slack running somewhere in the UI.
+    private static func twoAppQuittingPreview(_ name: String) -> ApplyPreview {
+        ApplyPreview(
+            profileName: name,
+            current: DockState(),
+            target: DockState(),
+            plan: DockPlan(operations: [], summary: ""),
+            skipped: [],
+            switchPlan: SwitchPlan(
+                scope: .previousProfileApps,
+                willQuit: [
+                    RunningAppInfo(processIdentifier: 7, bundleId: "com.example.slack", name: "Slack"),
+                    RunningAppInfo(processIdentifier: 8, bundleId: "com.example.figma", name: "Figma"),
+                ]
+            )
+        )
+    }
+
+    /// A fresh applier per test: it records the answers it was given.
+    private static func quittingApplier() -> FakeApplier {
+        FakeApplier { _, confirm in
+            let accepted = await confirm?(Self.twoAppQuittingPreview("Work")) ?? false
+            return accepted ? .applied(report()) : .cancelled(rolledBack: false)
+        }
+    }
+
+    @Test func excludingAnAppInThePanelHoldsWhenAcceptedFromThePopoverCard() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let applier = Self.quittingApplier()
+        let model = MenuBarViewModel(
+            library: FakeLibrary([work]), dock: FakeDockBackend(), applier: applier,
+            undoer: FakeUndoer(), confirmationPresenter: presenter
+        )
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.confirmationModel != nil })
+        // One model per question, shared by the panel and the popover.
+        #expect(presenter.model === model.confirmationModel)
+
+        // The panel's checkbox keeps Slack running; the popover card's Apply then accepts.
+        presenter.model?.setAppChecked(false, for: "com.example.slack")
+        model.confirmationModel?.switchAction()
+
+        #expect(await eventually { model.activity == nil })
+        #expect(await applier.answers == [ApplyConfirmResult(accepted: true, excludedBundleIDs: ["com.example.slack"])])
+        #expect(model.confirmationModel == nil)
+    }
+
+    @Test func excludingAnAppInThePopoverHoldsWhenAcceptedFromThePanel() async {
+        let work = profile("Work")
+        let presenter = FakePresenter()
+        let applier = Self.quittingApplier()
+        let model = MenuBarViewModel(
+            library: FakeLibrary([work]), dock: FakeDockBackend(), applier: applier,
+            undoer: FakeUndoer(), confirmationPresenter: presenter
+        )
+
+        model.applyFromHotkey(profileID: work.id)
+        #expect(await eventually { model.confirmationModel != nil })
+        model.confirmationModel?.setAppChecked(false, for: "com.example.figma")
+        presenter.userAnswers(true)
+
+        #expect(await eventually { model.activity == nil })
+        #expect(await applier.answers == [ApplyConfirmResult(accepted: true, excludedBundleIDs: ["com.example.figma"])])
+    }
+
+    @Test func theDiffSheetEditsTheSameExclusionsAsTheQuestion() async {
+        let applier = Self.quittingApplier()
+        let model = makeModel(applier: applier)
+
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmation?.preview != nil })
+        let preview = model.confirmation!.preview!
+
+        // The sheet is built on the question's model, so its checkbox is the question's checkbox.
+        let sheet = DiffSheetViewModel(preview: preview, switchConfirmation: model.confirmationModel)
+        #expect(sheet.switchConfirmationViewModel === model.confirmationModel)
+        sheet.switchConfirmationViewModel?.setAppChecked(false, for: "com.example.slack")
+        #expect(model.confirmationModel?.excludedBundleIDs == ["com.example.slack"])
+
+        // Applying from the sheet, or from anything else that answers, keeps Slack running.
+        model.resolveConfirmation(sheet.confirmResult)
+        #expect(await eventually { model.activity == nil })
+        #expect(await applier.answers.map(\.excludedBundleIDs) == [["com.example.slack"]])
+    }
+
+    @Test func aBareAcceptStillCarriesTheExclusions() async {
+        let applier = Self.quittingApplier()
+        let model = makeModel(applier: applier)
+
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmationModel != nil })
+        model.confirmationModel?.setAppChecked(false, for: "com.example.slack")
+        model.resolveConfirmation(.accepted)
+
+        #expect(await eventually { model.activity == nil })
+        #expect(await applier.answers.map(\.excludedBundleIDs) == [["com.example.slack"]])
+    }
+
+    @Test func eachQuestionGetsAFreshModelWithNothingExcluded() async {
+        let applier = Self.quittingApplier()
+        let model = makeModel(applier: applier)
+
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmationModel != nil })
+        model.confirmationModel?.setAppChecked(false, for: "com.example.slack")
+        model.resolveConfirmation(.cancelled)
+        #expect(await eventually { model.activity == nil })
+        #expect(model.confirmationModel == nil)
+
+        model.apply(profile("Work"))
+        #expect(await eventually { model.confirmationModel != nil })
+        #expect(model.confirmationModel?.excludedBundleIDs.isEmpty == true)
+        model.resolveConfirmation(.cancelled)
+        #expect(await eventually { model.activity == nil })
     }
 
     @Test func aHotkeyApplyIsAnAutomaticTriggerAndAPopoverApplyIsNot() async {
@@ -557,7 +683,7 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(await eventually { model.confirmation != nil })
         #expect(presenter.presented.isEmpty)
 
-        model.resolveConfirmation(false)
+        model.resolveConfirmation(.cancelled)
         #expect(await eventually { model.activity == nil })
         // Answering on the card also takes down any alert.
         #expect(presenter.dismissCount == 1)
@@ -612,10 +738,10 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         model.apply(profile("Work"))
         #expect(await eventually { model.confirmation != nil })
 
-        model.resolveConfirmation(true, token: -1)
+        model.resolveConfirmation(.accepted, token: -1)
         #expect(model.confirmation != nil)
 
-        model.resolveConfirmation(false)
+        model.resolveConfirmation(.cancelled)
         #expect(await eventually { model.activity == nil })
     }
 
@@ -631,7 +757,7 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
         #expect(model.confirmation != nil)
         #expect(model.isBusy)
 
-        model.resolveConfirmation(false)
+        model.resolveConfirmation(.cancelled)
         #expect(await eventually { model.activity == nil })
     }
 
@@ -644,7 +770,7 @@ private func eventually(_ condition: () -> Bool) async -> Bool {
 
         model.apply(profile("Work"))
         #expect(await eventually { model.confirmation != nil })
-        model.resolveConfirmation(false)
+        model.resolveConfirmation(.cancelled)
         #expect(await eventually { model.activity == nil })
 
         #expect(model.banner?.message == "Cancelled. The Dock was not changed.")
