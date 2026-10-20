@@ -18,6 +18,7 @@ enum AppEnvironment {
         let prefsPreviewer: any DockPrefsPreviewing
         /// Reverts an active preview before the app quits; the editor's panel registers with it.
         let previewQuit: PreviewQuitCoordinator
+        let urlRouter: OhMyDockURLRouter
     }
 
     /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
@@ -46,24 +47,51 @@ enum AppEnvironment {
         )
         let bootstrapper = FirstLaunchBootstrapper(profileStore: profiles, snapshotStore: snapshots)
         let hotkeys = HotkeyService(registrar: KeyboardShortcutsRegistrar())
+        let activeRecord: any ActiveProfileRecording = (try? FileActiveProfileRecord()) ?? InMemoryActiveProfileRecord()
+        let confirmationPresenter = AlertConfirmationPresenter()
+        let undoer = SnapshotUndoService(
+            snapshots: snapshots,
+            restarter: restarter,
+            record: (try? FileSpentUndoRecord()) ?? InMemorySpentUndoRecord(),
+            prefsWriter: prefsWriter
+        )
         let menuBar = MenuBarViewModel(
             library: profiles,
             dock: backend,
             applier: applier,
-            undoer: SnapshotUndoService(
-                snapshots: snapshots,
-                restarter: restarter,
-                record: (try? FileSpentUndoRecord()) ?? InMemorySpentUndoRecord(),
-                prefsWriter: prefsWriter
-            ),
+            undoer: undoer,
             bootstrap: { _ = try await bootstrapper.runIfNeeded() },
             gate: gate,
-            activeRecord: (try? FileActiveProfileRecord()) ?? InMemoryActiveProfileRecord(),
-            confirmationPresenter: AlertConfirmationPresenter(),
+            activeRecord: activeRecord,
+            confirmationPresenter: confirmationPresenter,
             changes: changes,
             appSwitcher: appSwitcher
         )
         hotkeys.attach(menuBar: menuBar)
+        let commandCenter = ExternalCommandCenter(
+            profiles: profiles,
+            snapshots: snapshots,
+            applier: applier,
+            undo: undoer,
+            restorer: SnapshotRestorer(snapshots: snapshots, restarter: restarter, prefsWriter: prefsWriter),
+            dock: backend,
+            prefsWriter: prefsWriter,
+            locks: fileLocks,
+            activeRecord: activeRecord,
+            dockutilURL: BundledTools.dockutilURL()
+        )
+        let urlRouter = OhMyDockURLRouter(
+            commandCenter: commandCenter,
+            gate: gate,
+            opener: LiveURLOpener(),
+            consent: URLConsentAlertPresenter(),
+            confirm: URLApplyConfirmationService(presenter: confirmationPresenter),
+            messaging: MenuBarURLMessaging(menuBar: menuBar),
+            profileNameExists: { name in
+                let listed = await profiles.list()
+                return listed.profiles.contains { $0.name.localizedCaseInsensitiveCompare(name) == .orderedSame }
+            }
+        )
         let watcher = StoreChangeWatcher {
             changes.notify()
             Task { await menuBar.refresh() }
@@ -84,9 +112,18 @@ enum AppEnvironment {
             currentVersion: AppVersion.current,
             opener: WorkspaceReleasePageOpener()
         )
-        return Shell(menuBar: menuBar, hotkeys: hotkeys, settings: settings, history: history, updates: updates, profiles: profiles, gate: gate,
-                     prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter),
-                     previewQuit: PreviewQuitCoordinator())
+        return Shell(
+            menuBar: menuBar,
+            hotkeys: hotkeys,
+            settings: settings,
+            history: history,
+            updates: updates,
+            profiles: profiles,
+            gate: gate,
+            prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter),
+            previewQuit: PreviewQuitCoordinator(),
+            urlRouter: urlRouter
+        )
     }
 
     private static func makeLiveBackend() -> any DockBackend {

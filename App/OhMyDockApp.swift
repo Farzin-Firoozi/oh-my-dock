@@ -10,18 +10,21 @@ struct OhMyDockApp: App {
         let shell = AppEnvironment.makeShell()
         _shell = State(initialValue: shell)
         AppDelegate.quitCoordinator = shell.previewQuit
+        AppDelegate.urlRouter = shell.urlRouter
         // The popover's content is not built until it is first opened; capture the first-launch
         // profile and load the profile list now.
-        Task {
-            await shell.menuBar.start()
-            await shell.settings.load()
-            await shell.updates.checkIfDue()
-        }
     }
 
     var body: some Scene {
         MenuBarExtra("oh-my-dock", systemImage: "dock.rectangle") {
             MenuBarContentView(model: shell.menuBar, updates: shell.updates)
+                .background { URLWindowObserver() }
+                .task {
+                    await shell.menuBar.start()
+                    appDelegate.markStartupComplete()
+                    await shell.settings.load()
+                    await shell.updates.checkIfDue()
+                }
                 .onChange(of: shell.menuBar.profiles) { _, profiles in
                     shell.hotkeys.sync(profiles: profiles)
                 }

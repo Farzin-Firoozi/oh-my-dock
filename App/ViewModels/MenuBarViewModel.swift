@@ -490,6 +490,10 @@ final class MenuBarViewModel {
 
     func dismissBanner() { banner = nil }
 
+    func showExternalControlDeniedBanner() {
+        show(.failure, "External control from URLs is turned off in Settings.")
+    }
+
     /// Puts `message` in the popover's banner. A failure of a hotkey apply is also floated, because
     /// the popover is closed when a hotkey is pressed and nobody would see the banner.
     private func show(_ kind: Banner.Kind, _ message: String, from source: ApplySource = .popover) {

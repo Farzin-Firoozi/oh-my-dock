@@ -8,6 +8,24 @@ struct SettingsView: View {
 
     var body: some View {
         Form {
+            Section("External control") {
+                Picker(
+                    "URLs from other apps",
+                    selection: Binding(
+                        get: { model.externalControl },
+                        set: { model.setExternalControl($0) }
+                    )
+                ) {
+                    Text("Ask first").tag(ExternalControlMode.ask)
+                    Text("Allow").tag(ExternalControlMode.allowed)
+                    Text("Don't allow").tag(ExternalControlMode.denied)
+                }
+                Text("Controls ohmydock:// links only. The CLI and Shortcuts are not gated.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             Section {
                 Toggle(
                     "Launch at login",

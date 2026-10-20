@@ -12,25 +12,35 @@ final class SettingsViewModel {
     private(set) var hotkeyError: String?
     /// Bumped when a recorder's shortcut was rejected so its row resets to the stored value.
     private(set) var hotkeyResetToken = 0
+    var externalControl: ExternalControlMode = .ask
 
     @ObservationIgnored private let library: any ProfileLibrary
+    @ObservationIgnored private let defaults: UserDefaults
     @ObservationIgnored private let launchAtLoginService: any LaunchAtLoginManaging
     @ObservationIgnored private let hotkeys: HotkeyService
 
     init(
         library: any ProfileLibrary,
         launchAtLogin: any LaunchAtLoginManaging,
-        hotkeys: HotkeyService
+        hotkeys: HotkeyService,
+        defaults: UserDefaults = .standard
     ) {
         self.library = library
         launchAtLoginService = launchAtLogin
         self.hotkeys = hotkeys
+        self.defaults = defaults
     }
 
     func load() async {
         profiles = await library.profiles()
         launchAtLogin = launchAtLoginService.isRegistered()
+        externalControl = ExternalControlMode.read(from: defaults)
         hotkeys.sync(profiles: profiles)
+    }
+
+    func setExternalControl(_ mode: ExternalControlMode) {
+        externalControl = mode
+        ExternalControlMode.write(mode, to: defaults)
     }
 
     func setLaunchAtLogin(_ enabled: Bool) {

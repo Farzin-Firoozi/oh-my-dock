@@ -7,6 +7,31 @@ import AppKit
 final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Set once by `OhMyDockApp` before the first quit can happen.
     static var quitCoordinator: PreviewQuitCoordinator?
+    /// Handles `ohmydock://` URLs once the menu bar has finished starting.
+    static var urlRouter: OhMyDockURLRouter?
+
+    private var pendingURLs: [URL] = []
+    private var startupComplete = false
+
+    func application(_ application: NSApplication, open urls: [URL]) {
+        pendingURLs.append(contentsOf: urls)
+        Task { await drainPendingURLs() }
+    }
+
+    /// Called after `MenuBarViewModel.start()` (including first-launch capture).
+    func markStartupComplete() {
+        startupComplete = true
+        Task { await drainPendingURLs() }
+    }
+
+    private func drainPendingURLs() async {
+        guard startupComplete, let router = Self.urlRouter else { return }
+        let batch = pendingURLs
+        pendingURLs.removeAll()
+        for url in batch {
+            await router.handle(url)
+        }
+    }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
         guard let coordinator = Self.quitCoordinator, coordinator.hasActivePreview else { return .terminateNow }
