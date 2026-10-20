@@ -89,6 +89,7 @@ struct EditorWindow: View {
                 switch tab {
                 case .layout:
                     DockCanvas(model: model, profile: profile)
+                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
                         .inspector(isPresented: $showsInspector) {
                             ItemInspector(model: model)
                                 .inspectorColumnWidth(min: 240, ideal: 280, max: 360)

@@ -25,6 +25,7 @@ struct DockCanvas: View {
                         .padding(DockTileStyle.labeled.barPadding)
                 }
                 .scrollBounceBehavior(.basedOnSize)
+                .frame(minWidth: 0, maxWidth: .infinity)
                 .fixedSize(horizontal: false, vertical: true)
                 .background(.regularMaterial, in: RoundedRectangle(cornerRadius: 22, style: .continuous))
                 .overlay {
@@ -53,7 +54,7 @@ struct DockCanvas: View {
             if plainStrip { Spacer(minLength: 0) }
         }
         .padding(24)
-        .frame(maxWidth: .infinity, maxHeight: .infinity)
+        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
         .background(.background)
         .contentShape(Rectangle())
         .onTapGesture { model.selectedItemID = nil }

@@ -13,14 +13,21 @@ struct MacBookMockupView: View {
 
     var body: some View {
         let selection = settings.selection
+        let silhouetteAspect = LaptopLayout.silhouetteAspect(screenAspect: selection.model.aspectRatio)
         VStack(spacing: 10) {
             header(selection)
-            GeometryReader { geometry in
-                if let layout = LaptopLayout.fit(in: geometry.size, screenAspect: selection.model.aspectRatio) {
-                    laptop(layout, selection)
+            Color.clear
+                .aspectRatio(silhouetteAspect, contentMode: .fit)
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                .overlay {
+                    GeometryReader { geometry in
+                        if let layout = LaptopLayout.fit(in: geometry.size, screenAspect: selection.model.aspectRatio) {
+                            laptop(layout, selection)
+                        }
+                    }
                 }
-            }
         }
+        .frame(minWidth: 0, maxWidth: .infinity)
         .accessibilityElement(children: .contain)
         .accessibilityLabel("Dock preview in a \(selection.model.marketingName)")
         .task { await wallpaper.run() }
