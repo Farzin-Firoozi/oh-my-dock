@@ -5,16 +5,16 @@ import SwiftUI
 /// The profile editor: profile sidebar, Dock strip canvas and a tile inspector.
 /// Host it in a `Window("Editor", id: "editor")` scene.
 struct EditorWindow: View {
-    private enum Tab: Hashable { case layout, preferences }
+    private enum Pane: Hashable { case tile, dock }
 
     /// Why the user is leaving a screen that has a preview on the Dock.
     private enum Departure: Identifiable {
-        case tab(Tab)
+        case pane(Pane)
         case profile
 
         var id: String {
             switch self {
-            case .tab: "tab"
+            case .pane: "pane"
             case .profile: "profile"
             }
         }
@@ -23,7 +23,7 @@ struct EditorWindow: View {
     @State private var model: EditorViewModel
     @State private var panel: PrefsPanelViewModel
     @State private var showsInspector = true
-    @State private var tab: Tab = .layout
+    @State private var pane: Pane = .tile
     @State private var departure: Departure?
     private let quit: PreviewQuitCoordinator
     private let activate: (UUID) -> Void
@@ -107,52 +107,36 @@ struct EditorWindow: View {
     @ViewBuilder
     private var detail: some View {
         if let profile = model.selectedProfile {
-            Group {
-                switch tab {
-                case .layout:
-                    DockCanvas(model: model, profile: profile)
-                        .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
-                        .inspector(isPresented: $showsInspector) {
-                            ItemInspector(model: model)
-                                .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
-                        }
-                case .preferences:
-                    PrefsPanelView(panel: panel)
+            DockCanvas(model: model, profile: profile)
+                .frame(minWidth: 0, maxWidth: .infinity, maxHeight: .infinity)
+                .inspector(isPresented: $showsInspector) {
+                    inspector
+                        .inspectorColumnWidth(min: 240, ideal: 280, max: 360)
                 }
-            }
             .navigationTitle(profile.name)
             .navigationSubtitle(subtitle(for: profile))
             .toolbar {
-                ToolbarItem(placement: .principal) {
-                    Picker("Section", selection: tabBinding) {
-                        Text("Layout").tag(Tab.layout)
-                        Text("Dock Preferences").tag(Tab.preferences)
-                    }
-                    .pickerStyle(.segmented)
-                }
                 ToolbarItem(placement: .primaryAction) {
                     Button { activate(profile.id) } label: {
                         Label("Activate", systemImage: "play.fill")
                     }
                     .help("Apply this profile to your Dock")
                 }
-                if tab == .layout {
-                    ToolbarItem(placement: .primaryAction) {
-                        Toggle(isOn: $plainStrip) {
-                            Label("Plain Strip", systemImage: "rectangle.split.3x1")
-                        }
-                        .help("Show the Dock as a flat strip instead of inside a MacBook")
+                ToolbarItem(placement: .primaryAction) {
+                    Toggle(isOn: $plainStrip) {
+                        Label("Plain Strip", systemImage: "rectangle.split.3x1")
                     }
-                    ToolbarItem(placement: .primaryAction) {
-                        Button {
-                            withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
-                                showsInspector.toggle()
-                            }
-                        } label: {
-                            Label("Inspector", systemImage: "sidebar.trailing")
+                    .help("Show the Dock as a flat strip instead of inside a MacBook")
+                }
+                ToolbarItem(placement: .primaryAction) {
+                    Button {
+                        withAnimation(.spring(response: 0.35, dampingFraction: 0.85)) {
+                            showsInspector.toggle()
                         }
-                        .help("Show or hide the inspector")
+                    } label: {
+                        Label("Inspector", systemImage: "sidebar.trailing")
                     }
+                    .help("Show or hide the inspector")
                 }
             }
         } else {
@@ -164,14 +148,35 @@ struct EditorWindow: View {
         }
     }
 
-    private var tabBinding: Binding<Tab> {
+    /// The inspector: the selected tile, or the profile's Dock preferences. The mockup stays in view
+    /// either way, so a preference change shows up on it as you make it.
+    private var inspector: some View {
+        VStack(spacing: 0) {
+            Picker("Inspector", selection: paneBinding) {
+                Text("Tile").tag(Pane.tile)
+                Text("Dock").tag(Pane.dock)
+            }
+            .pickerStyle(.segmented)
+            .labelsHidden()
+            .padding(10)
+            Group {
+                switch pane {
+                case .tile: ItemInspector(model: model)
+                case .dock: PrefsPanelView(panel: panel)
+                }
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+    }
+
+    private var paneBinding: Binding<Pane> {
         Binding(
-            get: { tab },
-            set: { newTab in
-                if tab == .preferences, newTab != .preferences, panel.isPreviewing {
-                    departure = .tab(newTab)
+            get: { pane },
+            set: { newPane in
+                if pane == .dock, newPane != .dock, panel.isPreviewing {
+                    departure = .pane(newPane)
                 } else {
-                    tab = newTab
+                    pane = newPane
                 }
             }
         )
@@ -184,7 +189,7 @@ struct EditorWindow: View {
 
     private func leave(_ departure: Departure, revert: Bool) async {
         guard await panel.resolvePreview(revert: revert) else { return }
-        if case .tab(let destination) = departure { tab = destination }
+        if case .pane(let destination) = departure { pane = destination }
     }
 
     /// Offers to revert a Dock preview before the window closes. Holds the close while asking.
