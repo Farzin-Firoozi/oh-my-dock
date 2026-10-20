@@ -1,0 +1,21 @@
+<svg width="1024" height="1024" viewBox="0 0 1024 1024" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <defs>
+    <clipPath id="body">
+      <rect x="100" y="100" width="824" height="824" rx="185"/>
+    </clipPath>
+    <filter id="shadow" x="0" y="0" width="1024" height="1024" filterUnits="userSpaceOnUse" color-interpolation-filters="sRGB">
+      <feGaussianBlur stdDeviation="14"/>
+    </filter>
+  </defs>
+  <!-- macOS icon grid: 824 x 824 body centred in a 1024 canvas, with a soft drop shadow. -->
+  <rect x="100" y="110" width="824" height="824" rx="185" fill="black" opacity="0.30" filter="url(#shadow)"/>
+  <g clip-path="url(#body)">
+    <g transform="translate(100 100) scale(1.13812)">
+      <rect width="724" height="724" fill="white"/>
+      <rect x="121" y="277" width="481" height="169.042" rx="84.5208" fill="black"/>
+      <rect x="442.179" y="311.576" width="99.8882" height="99.8882" rx="10" fill="#1FBD00"/>
+      <rect x="171.713" y="311.576" width="99.8882" height="99.8882" rx="49.9441" fill="#F45246"/>
+      <path d="M348.251 326.576C352.1 319.909 361.722 319.91 365.571 326.576L405.9 396.427C409.749 403.094 404.937 411.427 397.239 411.427H316.582C308.884 411.427 304.073 403.094 307.922 396.427L348.251 326.576Z" fill="#FEC300"/>
+    </g>
+  </g>
+</svg>
