@@ -20,6 +20,8 @@ public final class OperationLock: @unchecked Sendable {
     private let lock = NSLock()
     private var operationFD: Int32 = -1
     private var previewFD: Int32 = -1
+    private var previewExclusiveHeld = false
+    private var operationExclusiveHeld = false
 
     public init(supportRoot: URL, fileManager: FileManager = .default) throws {
         let root = supportRoot.standardizedFileURL
@@ -37,18 +39,26 @@ public final class OperationLock: @unchecked Sendable {
         try self.init(supportRoot: SupportPaths.root(fileManager: fileManager), fileManager: fileManager)
     }
 
-    /// Non-blocking probe: true when another process holds the preview lock.
+    /// Non-blocking probe: true when the preview lock is held (this process or another).
     public func isPreviewHeld() -> Bool {
-        guard let fd = openLock(at: previewURL) else { return false }
-        defer { close(fd) }
-        return !tryAcquire(fd: fd, type: Int16(F_WRLCK), wait: false)
+        lock.withLock {
+            if previewExclusiveHeld { return true }
+            if previewFD >= 0 {
+                return otherProcessWouldBlock(fd: previewFD, type: Int16(F_WRLCK))
+            }
+            return probeOtherProcessHeld(at: previewURL, type: Int16(F_WRLCK))
+        }
     }
 
-    /// Non-blocking probe: true when another process holds the operation lock (any mode).
+    /// Non-blocking probe: true when the operation lock is held exclusively (this process or another).
     public func isOperationHeld() -> Bool {
-        guard let fd = openLock(at: operationURL) else { return false }
-        defer { close(fd) }
-        return !tryAcquire(fd: fd, type: Int16(F_WRLCK), wait: false)
+        lock.withLock {
+            if operationExclusiveHeld { return true }
+            if operationFD >= 0 {
+                return otherProcessWouldBlock(fd: operationFD, type: Int16(F_WRLCK))
+            }
+            return probeOtherProcessHeld(at: operationURL, type: Int16(F_WRLCK))
+        }
     }
 
     /// Held for prefs preview in the app, or exclusively for apply/undo/restore in the CLI.
@@ -57,6 +67,7 @@ public final class OperationLock: @unchecked Sendable {
     ) async throws -> T {
         let fd = try openPersistentPreview()
         try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: .zero, reason: .previewActive)
+        markPreviewExclusiveHeld(true)
         defer { releasePreview() }
         return try await body()
     }
@@ -70,15 +81,20 @@ public final class OperationLock: @unchecked Sendable {
         guard tryAcquire(fd: previewFD, type: Int16(F_WRLCK), wait: false) else {
             throw OperationLockError.busy(reason: .previewActive)
         }
+        markPreviewExclusiveHeld(true)
         let operationFD = try openPersistentOperation()
         do {
             try await acquire(fd: operationFD, type: Int16(F_WRLCK), timeout: timeout, reason: .operationLock)
+            markOperationExclusiveHeld(true)
             defer {
+                markOperationExclusiveHeld(false)
                 unlock(fd: operationFD)
+                markPreviewExclusiveHeld(false)
                 unlock(fd: previewFD)
             }
             return try await body()
         } catch {
+            markPreviewExclusiveHeld(false)
             unlock(fd: previewFD)
             throw error
         }
@@ -94,7 +110,11 @@ public final class OperationLock: @unchecked Sendable {
         }
         let fd = try openPersistentOperation()
         try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: timeout, reason: .operationLock)
-        defer { unlock(fd: fd) }
+        markOperationExclusiveHeld(true)
+        defer {
+            markOperationExclusiveHeld(false)
+            unlock(fd: fd)
+        }
         return try await body()
     }
 
@@ -121,15 +141,20 @@ public final class OperationLock: @unchecked Sendable {
         guard tryAcquire(fd: previewFD, type: Int16(F_WRLCK), wait: false) else {
             throw OperationLockError.busy(reason: .previewActive)
         }
+        markPreviewExclusiveHeld(true)
         let operationFD = try openPersistentOperation()
         do {
             try await acquire(fd: operationFD, type: Int16(F_WRLCK), timeout: timeout, reason: .operationLock)
+            markOperationExclusiveHeld(true)
             defer {
+                markOperationExclusiveHeld(false)
                 unlock(fd: operationFD)
+                markPreviewExclusiveHeld(false)
                 unlock(fd: previewFD)
             }
             return try await body()
         } catch {
+            markPreviewExclusiveHeld(false)
             unlock(fd: previewFD)
             throw error
         }
@@ -142,6 +167,7 @@ public final class OperationLock: @unchecked Sendable {
     ) async throws -> T {
         let fd = try openPersistentPreview()
         try await acquire(fd: fd, type: Int16(F_WRLCK), timeout: .zero, reason: .previewActive)
+        markPreviewExclusiveHeld(true)
         defer { releasePreview() }
         return try await body()
     }
@@ -187,10 +213,34 @@ public final class OperationLock: @unchecked Sendable {
 
     private func releasePreview() {
         lock.withLock {
+            previewExclusiveHeld = false
             if previewFD >= 0 {
                 unlock(fd: previewFD)
             }
         }
+    }
+
+    private func markPreviewExclusiveHeld(_ held: Bool) {
+        lock.withLock { previewExclusiveHeld = held }
+    }
+
+    private func markOperationExclusiveHeld(_ held: Bool) {
+        lock.withLock { operationExclusiveHeld = held }
+    }
+
+    /// `F_GETLK`: would another process block this lock type on `fd`?
+    private func otherProcessWouldBlock(fd: Int32, type: Int16) -> Bool {
+        var flock = flockStruct(type: type)
+        guard fcntl(fd, F_GETLK, &flock) == 0 else { return false }
+        guard flock.l_type != F_UNLCK else { return false }
+        return flock.l_pid != getpid()
+    }
+
+    /// Opens a temporary descriptor, probes with `F_GETLK`, and closes (safe when this process holds no lock on the file).
+    private func probeOtherProcessHeld(at url: URL, type: Int16) -> Bool {
+        guard let fd = openLock(at: url) else { return false }
+        defer { close(fd) }
+        return otherProcessWouldBlock(fd: fd, type: type)
     }
 
     private func unlock(fd: Int32) {
