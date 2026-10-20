@@ -30,7 +30,7 @@ struct OhMyDockApp: App {
                 }
         } label: {
             Image("MenuBarIcon")
-                .accessibilityLabel("oh-my-dock")
+                .accessibilityLabel("Oh My Dock")
         }
         .menuBarExtraStyle(.window)
 

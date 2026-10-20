@@ -7,6 +7,7 @@ struct MenuBarContentView: View {
     @Bindable var model: MenuBarViewModel
     var updates: UpdateViewModel
     @Environment(\.openWindow) private var openWindow
+    @Environment(\.openSettings) private var openSettings
     @FocusState private var nameFieldFocused: Bool
     /// What the diff sheet shows. Built when the sheet opens and kept until it has closed, so the
     /// content doesn't vanish mid-dismissal when applying clears the model's confirmation. It wraps
@@ -83,10 +84,11 @@ struct MenuBarContentView: View {
 
     private var header: some View {
         HStack(spacing: 8) {
-            Image(systemName: "dock.rectangle")
-                .font(.title3)
-                .foregroundStyle(.tint)
-            Text("oh-my-dock")
+            Image(nsImage: NSApp.applicationIconImage)
+                .resizable()
+                .frame(width: 24, height: 24)
+                .accessibilityHidden(true)
+            Text("Oh My Dock")
                 .font(.headline)
             Spacer()
         }
@@ -142,8 +144,9 @@ struct MenuBarContentView: View {
                 NSApp.activate(ignoringOtherApps: true)
                 openWindow(id: "history")
             }
-            SettingsLink {
-                ActionRow("Settings…", systemImage: "gear") {}
+            ActionRow("Settings…", systemImage: "gear") {
+                NSApp.activate(ignoringOtherApps: true)
+                openSettings()
             }
         }
     }
@@ -172,7 +175,7 @@ struct MenuBarContentView: View {
 
     private var footer: some View {
         Card {
-            ActionRow("Quit oh-my-dock", systemImage: "power", shortcut: "q") {
+            ActionRow("Quit Oh My Dock", systemImage: "power", shortcut: "q") {
                 NSApplication.shared.terminate(nil)
             }
         }
