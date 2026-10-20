@@ -108,13 +108,13 @@ final class HistoryViewModel {
         do {
             switch action {
             case let .restore(snapshot):
-                try await gate.run("Restoring a snapshot") {
-                    try gate.requireNoPreview()
+                try gate.requireNoPreview()
+                try await gate.runExclusiveMutation("Restoring a snapshot") {
                     try await history.restore(id: snapshot.id)
                 }
             case let .delete(snapshot):
+                try gate.requireNoPreview()
                 try await gate.run("Deleting a snapshot") {
-                    try gate.requireNoPreview()
                     try await history.delete(id: snapshot.id)
                 }
             }

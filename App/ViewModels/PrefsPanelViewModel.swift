@@ -183,30 +183,28 @@ final class PrefsPanelViewModel: PreviewReverting {
         defer { endWork() }
         message = nil
         do {
+            gate.isPreviewActive = true
             let started = try await gate.run("Previewing Dock preferences") { () async throws -> PrefsPreviewSession? in
                 if let old = session {
                     try await previewer.revert(old)
                     setSession(nil)
                     previewedProfileName = nil
                 }
-                // From here on the Dock may hold previewed values, before a session exists to say so.
-                // Quit handling and the gate (apply, undo, hotkeys) must already see the preview.
                 setMayHavePreviewedValues(true)
                 let began: PrefsPreviewSession?
                 do {
                     began = try await previewer.begin(target)
                 } catch let error as PrefsPreviewError {
-                    // The previewer could not take its own write back: the preview stays active.
                     throw error
                 } catch {
                     setMayHavePreviewedValues(false)
                     throw error
                 }
-                // Set before the gate is released, so a queued apply sees the preview.
                 setSession(began)
                 setMayHavePreviewedValues(false)
                 return began
             }
+            gate.isPreviewActive = started != nil
             previewedProfileName = started == nil ? nil : profileName
             message = started == nil
                 ? Message(kind: .info, text: "The Dock already uses these preferences.")
@@ -233,6 +231,7 @@ final class PrefsPanelViewModel: PreviewReverting {
             try await gate.run("Reverting Dock preferences") { try await previewer.revert(active) }
             setSession(nil)
             previewedProfileName = nil
+            gate.isPreviewActive = false
             message = Message(kind: .success, text: "Dock preferences reverted.")
             return true
         } catch {

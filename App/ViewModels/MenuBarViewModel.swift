@@ -236,9 +236,15 @@ final class MenuBarViewModel {
             let previous = profiles.first { $0.id == (activeProfileID ?? lastAppliedID) && $0.id != profile.id }
             // A hotkey is an automatic source: it quits nothing unless the preview is confirmed.
             let trigger: ApplyTrigger = source == .popover ? .user : .automatic
-            let result = try await gate.run("Applying “\(profile.name)”") {
-                try gate.requireNoPreview()
-                return try await applier.apply(profile, from: previous, trigger: trigger) { [weak self] preview in
+            try gate.requireNoPreview()
+            let result = try await gate.runExclusiveMutation("Applying “\(profile.name)”") {
+                let controlSource: ControlSource = source == .popover ? .menu : .hotkey
+                return try await applier.apply(
+                    profile,
+                    from: previous,
+                    trigger: trigger,
+                    controlSource: controlSource
+                ) { [weak self] preview in
                     guard let self else { return .cancelled }
                     return await self.requestConfirmation(for: preview)
                 }
@@ -401,8 +407,8 @@ final class MenuBarViewModel {
         banner = nil
         defer { activity = nil }
         do {
-            try await gate.run("Restoring the previous Dock") {
-                try gate.requireNoPreview()
+            try gate.requireNoPreview()
+            try await gate.runExclusiveMutation("Restoring the previous Dock") {
                 try await undoer.undo(expecting: target.id)
             }
             lastAppliedID = nil

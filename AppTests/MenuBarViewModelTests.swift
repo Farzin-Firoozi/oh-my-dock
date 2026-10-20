@@ -68,6 +68,7 @@ extension FakeApplier {
         _ profile: Profile,
         from source: Profile?,
         trigger: ApplyTrigger,
+        controlSource: ControlSource? = nil,
         confirm: (@Sendable (ApplyPreview) async -> Bool)?
     ) async throws -> ApplyResult {
         record(trigger: trigger, source: source?.name)
@@ -78,6 +79,7 @@ extension FakeApplier {
         _ profile: Profile,
         from source: Profile?,
         trigger: ApplyTrigger,
+        controlSource: ControlSource? = nil,
         confirm: (@Sendable (ApplyPreview) async -> ApplyConfirmResult)?
     ) async throws -> ApplyResult {
         record(trigger: trigger, source: source?.name)

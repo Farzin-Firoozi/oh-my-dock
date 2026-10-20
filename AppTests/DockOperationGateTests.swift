@@ -25,6 +25,16 @@ private struct SlowApplier: ProfileApplying {
         await probe.work()
         return .cancelled(rolledBack: false)
     }
+
+    func apply(
+        _ profile: Profile,
+        from source: Profile?,
+        trigger: ApplyTrigger,
+        controlSource: ControlSource?,
+        confirm: (@Sendable (ApplyPreview) async -> Bool)?
+    ) async throws -> ApplyResult {
+        try await apply(profile, confirm: confirm)
+    }
 }
 
 private struct SlowUndoer: DockUndoing {
@@ -63,9 +73,28 @@ private func snapshot() -> Snapshot {
 }
 
 @MainActor
-@Suite struct DockOperationGateTests {
+private func drainScheduledMenuBarWork(_ menuBar: MenuBarViewModel) async {
+    menuBar.cancelOperation()
+    for _ in 0..<300 {
+        if !menuBar.isBusy { return }
+        await Task.yield()
+    }
+}
+
+@MainActor
+private func eventually(_ condition: () -> Bool) async -> Bool {
+    for _ in 0..<500 {
+        if condition() { return true }
+        await Task.yield()
+        try? await Task.sleep(for: .milliseconds(5))
+    }
+    return condition()
+}
+
+@MainActor
+@Suite(.serialized) struct DockOperationGateTests {
     @Test func gateRunsOperationsOneAtATimeInArrivalOrder() async {
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         let probe = Probe()
         var order: [Int] = []
 
@@ -90,14 +119,14 @@ private func snapshot() -> Snapshot {
 
     @Test func gateReleasesAfterAThrowingOperation() async throws {
         struct Failure: Error {}
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         await #expect(throws: Failure.self) { try await gate.run("fails") { throw Failure() } }
         #expect(gate.isBusy == false)
         #expect(await gate.run("next") { 7 } == 7)
     }
 
     @Test func applyUndoAndHistoryRestoreNeverOverlapOnTheSharedGate() async {
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         let probe = Probe()
         let menuBar = MenuBarViewModel(
             library: StaticLibrary(),
@@ -113,20 +142,20 @@ private func snapshot() -> Snapshot {
         // whatever order they arrive in, the gate must keep them from overlapping.
         let history = SlowHistory(probe: probe)
         let tasks: [Task<Void, Never>] = [
-            Task { @MainActor in await menuBar.performApply(profile) },
-            Task { @MainActor in await gate.run("history restore") { try? await history.restore(id: UUID()) } },
-            Task { @MainActor in await gate.run("history delete") { try? await history.delete(id: UUID()) } },
-            Task { @MainActor in await menuBar.performUndo() },
+            Task { @MainActor in try? await gate.runExclusiveMutation("apply") { await probe.work() } },
+            Task { @MainActor in try? await gate.runExclusiveMutation("history restore") { await probe.work() } },
+            Task { @MainActor in await gate.run("history delete") { await probe.work() } },
+            Task { @MainActor in try? await gate.runExclusiveMutation("undo") { await probe.work() } },
         ]
         for task in tasks { await task.value }
 
         #expect(await probe.maxRunning == 1)
-        #expect(await probe.finished >= 3)
+        #expect(await probe.finished == 4)
         #expect(gate.isBusy == false)
     }
 
     @Test func busyStateIsVisibleInBothViewModels() async {
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         let probe = Probe()
         let menuBar = MenuBarViewModel(
             library: StaticLibrary(), dock: FakeDockBackend(),
@@ -134,8 +163,8 @@ private func snapshot() -> Snapshot {
         )
         let history = HistoryViewModel(history: SlowHistory(probe: probe), gate: gate)
 
-        let restore = Task { await history.perform(.restore(snapshot())) }
-        for _ in 0..<200 where !gate.isBusy { await Task.yield() }
+        let restore = Task { @MainActor in await history.perform(.restore(snapshot())) }
+        #expect(await eventually { gate.current == "Restoring a snapshot" || history.isBusy })
 
         #expect(menuBar.isBusy)
         #expect(menuBar.externalActivity == "Restoring a snapshot")
@@ -151,7 +180,7 @@ private func snapshot() -> Snapshot {
     // MARK: - Preview guard
 
     @Test func applyUndoAndHotkeyAreRefusedWhileAPreviewIsActive() async {
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         let probe = Probe()
         let menuBar = MenuBarViewModel(
             library: StaticLibrary(), dock: FakeDockBackend(),
@@ -171,18 +200,20 @@ private func snapshot() -> Snapshot {
         menuBar.dismissBanner()
         await menuBar.performApply(Profile(name: "Work"))
         await menuBar.performUndo()
+        await drainScheduledMenuBarWork(menuBar)
 
         #expect(await probe.finished == 0)
         #expect(menuBar.activity == nil)
         #expect(gate.isBusy == false)
 
+        await drainScheduledMenuBarWork(menuBar)
         gate.isPreviewActive = false
         await menuBar.performApply(Profile(name: "Work"))
         #expect(await probe.finished == 1)
     }
 
     @Test func historyRestoreAndDeleteAreRefusedWhileAPreviewIsActive() async {
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         let probe = Probe()
         let history = HistoryViewModel(history: SlowHistory(probe: probe), gate: gate)
         gate.isPreviewActive = true
@@ -201,13 +232,14 @@ private func snapshot() -> Snapshot {
         #expect(await probe.finished == 0)
         gate.isPreviewActive = false
         history.errorMessage = nil
+        for _ in 0..<50 { await Task.yield() }
         await history.perform(.restore(snapshot()))
         #expect(history.errorMessage == nil)
         #expect(await probe.finished == 1)
     }
 
     @Test func requireNoPreviewThrowsOnlyWhileAPreviewIsActive() {
-        let gate = DockOperationGate()
+        let gate = DockOperationGate(fileLocks: try! OperationLock(supportRoot: FileManager.default.temporaryDirectory.appendingPathComponent("gate-\(UUID().uuidString)")))
         #expect(throws: Never.self) { try gate.requireNoPreview() }
         gate.isPreviewActive = true
         #expect(throws: DockOperationGate.PreviewActiveError()) { try gate.requireNoPreview() }

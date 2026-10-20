@@ -23,7 +23,8 @@ enum AppEnvironment {
     /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
     /// app shares. Nothing else constructs these.
     static func makeShell() -> Shell {
-        let gate = DockOperationGate()
+        let fileLocks = try! OperationLock()
+        let gate = DockOperationGate(fileLocks: fileLocks)
         let changes = DockChangeSignal()
         let profiles = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())
         let snapshots = SnapshotStore()
@@ -52,17 +53,22 @@ enum AppEnvironment {
             undoer: SnapshotUndoService(
                 snapshots: snapshots,
                 restarter: restarter,
-                record: FileSpentUndoRecord(),
+                record: (try? FileSpentUndoRecord()) ?? InMemorySpentUndoRecord(),
                 prefsWriter: prefsWriter
             ),
             bootstrap: { _ = try await bootstrapper.runIfNeeded() },
             gate: gate,
-            activeRecord: FileActiveProfileRecord(),
+            activeRecord: (try? FileActiveProfileRecord()) ?? InMemoryActiveProfileRecord(),
             confirmationPresenter: AlertConfirmationPresenter(),
             changes: changes,
             appSwitcher: appSwitcher
         )
         hotkeys.attach(menuBar: menuBar)
+        let watcher = StoreChangeWatcher {
+            changes.notify()
+            Task { await menuBar.refresh() }
+        }
+        watcher.start()
         let settings = SettingsViewModel(
             library: profiles,
             launchAtLogin: LiveLaunchAtLoginService(),
