@@ -40,12 +40,17 @@ APP="${ROOT}/build/Build/Products/Release/OhMyDock.app"
 [[ -d "${APP}" ]] || die "built app not found at ${APP}"
 HELPER="${APP}/Contents/Helpers/dockutil"
 [[ -f "${HELPER}" ]] || die "dockutil helper not embedded at ${HELPER}"
+CLI="${APP}/Contents/Helpers/ohmydock"
+[[ -f "${CLI}" ]] || die "ohmydock CLI not embedded at ${CLI}"
 
 # Inside-out: nested code first, then the bundle. --force re-signs anything Xcode signed.
 SIGN=(codesign --force --sign - --options runtime --timestamp=none)
 
-step "Ad-hoc signing helper"
+step "Ad-hoc signing dockutil helper"
 "${SIGN[@]}" "${HELPER}"
+
+step "Ad-hoc signing ohmydock CLI"
+"${SIGN[@]}" "${CLI}"
 
 # Any other nested code (frameworks, XPC, dylibs) before the app itself.
 while IFS= read -r nested; do
@@ -58,6 +63,7 @@ step "Ad-hoc signing app"
 
 step "Verifying signatures"
 codesign --verify --deep --strict --verbose=2 "${HELPER}"
+codesign --verify --deep --strict --verbose=2 "${CLI}"
 codesign --verify --deep --strict --verbose=2 "${APP}"
 
 DIST="${ROOT}/dist"
