@@ -191,6 +191,12 @@ public struct ExternalResult: Sendable {
     public var message: String
     public var envelope: ExternalEnvelope
 
+    public init(exitCode: Int, message: String, envelope: ExternalEnvelope) {
+        self.exitCode = exitCode
+        self.message = message
+        self.envelope = envelope
+    }
+
     public var ok: Bool { exitCode == 0 }
 
     public func jsonData() throws -> Data {
