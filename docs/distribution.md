@@ -42,7 +42,8 @@ cask "oh-my-dock" do
   depends_on macos: ">= :sonoma"
 
   app "OhMyDock.app"
-  binary "#{appdir}/OhMyDock.app/Contents/MacOS/ohmydock"   # CLI (v0.3+)
+  binary "#{appdir}/OhMyDock.app/Contents/Helpers/ohmydock"
+  manpage "OhMyDock.app/Contents/Resources/ohmydock.1"
 
   uninstall quit: "com.<user>.ohmydock"
 
@@ -54,11 +55,15 @@ cask "oh-my-dock" do
 end
 ```
 
-The `<user>` placeholders and the bundle ID get filled in once the GitHub org and bundle identifier are decided. The `binary` line ships the `ohmydock` CLI with the cask, with no separate formula needed.
+The `<user>` placeholders and the bundle ID get filled in once the GitHub org and bundle identifier are decided. The `binary` stanza symlinks Homebrew’s `bin/ohmydock` to `OhMyDock.app/Contents/Helpers/ohmydock` (not `Contents/MacOS/`). The `manpage` stanza installs `ohmydock.1` from the app bundle. No separate CLI formula is required.
+
+Shell completions are not installed by the cask; the cask caveats and `ohmydock.1` document `eval "$(ohmydock completions zsh)"` (and bash/fish equivalents).
+
+Third-party licenses ship inside the app at `Contents/Resources/ThirdParty/` (dockutil, KeyboardShortcuts, swift-argument-parser). `scripts/verify-release.sh` checks helpers, signing order, CLI `version --json`, and that the CLI version matches `CFBundleShortVersionString`.
 
 ### Release checklist (per version)
 
-1. `scripts/release.sh`: archive → ad-hoc sign (bundled dockutil first, then app) → zip + sha256. No notarization (no Apple Developer account).
+1. `scripts/release.sh`: archive → ad-hoc sign (`dockutil`, then `ohmydock` with `--options runtime`, then the app bundle) → zip + sha256. No notarization (no Apple Developer account).
 2. Publish a GitHub Release with the zip; update the appcast if Sparkle is used (Phase 3.2).
 3. The tap action updates `version` + `sha256` and opens/merges a PR in `homebrew-tap`.
 4. Smoke test: `brew uninstall --cask oh-my-dock; brew install --cask <user>/tap/oh-my-dock`, launch it, and confirm the cask clears quarantine and the app opens (Gatekeeper warns on a direct download; the README documents right-click → Open / `xattr -cr`).

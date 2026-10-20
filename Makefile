@@ -6,6 +6,10 @@ generate:
 test: generate
 	cd Packages/OhMyDockCore && swift test
 	xcodebuild -project OhMyDock.xcodeproj -scheme OhMyDock -configuration Debug -derivedDataPath build test
+	@if command -v mandoc >/dev/null 2>&1; then mandoc -Tlint CLI/ohmydock.1; fi
+	./scripts/test-verify-release.sh
+	./packaging/homebrew-tap/test-cask.sh
+	$(MAKE) cli-smoke
 
 build: generate
 	xcodebuild -project OhMyDock.xcodeproj -scheme OhMyDock -configuration Debug -derivedDataPath build build

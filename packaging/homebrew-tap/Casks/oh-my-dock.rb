@@ -15,6 +15,8 @@ cask "oh-my-dock" do
   depends_on macos: ">= :sonoma"
 
   app "OhMyDock.app"
+  binary "#{appdir}/OhMyDock.app/Contents/Helpers/ohmydock"
+  manpage "OhMyDock.app/Contents/Resources/ohmydock.1"
 
   postflight do
     system_command "/usr/bin/xattr", args: ["-dr", "com.apple.quarantine", "#{appdir}/OhMyDock.app"]
@@ -30,5 +32,10 @@ cask "oh-my-dock" do
     oh-my-dock is ad-hoc signed and not notarized (no Apple Developer ID).
     macOS Gatekeeper may block the first launch; use Right-click → Open, or run:
       xattr -cr /Applications/OhMyDock.app
+
+    Shell completions (not installed automatically):
+      eval "$(ohmydock completions zsh)"
+      eval "$(ohmydock completions bash)"
+      ohmydock completions fish | source
   EOS
 end

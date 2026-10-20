@@ -21,6 +21,8 @@ required=(
   'strategy :github_latest'
   'depends_on macos: ">= :sonoma"'
   'app "OhMyDock.app"'
+  'binary "#{appdir}/OhMyDock.app/Contents/Helpers/ohmydock"'
+  'manpage "OhMyDock.app/Contents/Resources/ohmydock.1"'
   'postflight do'
   'com.apple.quarantine'
   'zap trash:'
@@ -29,16 +31,14 @@ required=(
   '~/Library/Caches/io.github.farzin-firoozi.OhMyDock'
   'caveats'
   'not notarized'
+  'ohmydock completions zsh'
+  'ohmydock completions bash'
+  'ohmydock completions fish'
 )
 
 for needle in "${required[@]}"; do
   grep -Fq "${needle}" "${CASK}" || { echo "missing required fragment: ${needle}" >&2; exit 1; }
 done
-
-if grep -Fq 'binary "' "${CASK}"; then
-  echo "cask must not declare binary (CLI not shipped yet)" >&2
-  exit 1
-fi
 
 version_line="$(grep -E '^  version "[0-9]+\.[0-9]+\.[0-9]+"$' "${CASK}" || true)"
 [[ -n "${version_line}" ]] || { echo "version line must be semver x.y.z" >&2; exit 1; }

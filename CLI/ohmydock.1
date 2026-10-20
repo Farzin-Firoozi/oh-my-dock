@@ -1,0 +1,289 @@
+.\" oh-my-dock CLI manual — source: CLI/ohmydock.1 (shipped in OhMyDock.app/Contents/Resources/)
+.Dd October 20, 2026
+.Dt OHMYDOCK 1
+.Os
+.Sh NAME
+.Nm ohmydock
+.Nd control oh-my-dock profiles and the macOS Dock from the command line
+.Sh SYNOPSIS
+.Nm
+.Op Fl -json
+.Op Fl -quiet
+.Op Fl -no-color
+.Op Fl -yes
+.Op Fl -non-interactive
+.Op Fl -lock-timeout Ar seconds
+.Ar command
+.Op Ar arguments ...
+.Pp
+.Nm
+.Op Fl -version
+.Pp
+.Nm
+.Op Fl -help
+.Sh DESCRIPTION
+The
+.Nm
+utility drives oh-my-dock headlessly.
+It links the same
+.Lk Packages/OhMyDockCore OhMyDockCore
+library as the menu-bar app.
+The app does not need to be running.
+.Pp
+When
+.Fl -json
+is set, stdout is exactly one JSON document (envelope
+.Va schemaVersion
+1).
+The process exit code is the contract; human-readable text is not stable.
+.Pp
+Shell completion scripts are available via
+.Cm completions
+(see
+.Sx EXAMPLES ) .
+.Pp
+Never pass
+.Fl -allow-quit
+unless the user agreed to quit the apps listed in a dry-run or JSON
+.Va willQuit
+payload.
+.Fl -yes
+alone does not authorize quits.
+Do not edit
+.Pa ~/Library/Preferences/com.apple.dock.plist
+directly or run
+.Cm killall Dock .
+URL scheme
+.Lk ohmydock://
+links are handled by the menu-bar app, not this CLI.
+.Ss Environment
+.Bl -tag -width Ds
+.It Ev OHMYDOCK_SUPPORT_DIR
+Absolute path to the support directory (default
+.Pa ~/Library/Application Support/oh-my-dock/ ) .
+Relative paths are rejected (exit 2).
+.It Ev OHMYDOCK_LOCK_TIMEOUT
+Lock timeout in seconds (same as
+.Fl -lock-timeout ) .
+.It Ev NO_COLOR
+When set, disables color on human output.
+.El
+.Ss Files
+.Bl -tag -width Ds
+.It Pa ~/Library/Application Support/oh-my-dock/
+Profiles, snapshots, and lock files
+.Pq Pa operation.lock ,
+.Pa preview.lock ) .
+.It Pa OhMyDock.app/Contents/Helpers/ohmydock
+CLI binary inside the app bundle (Homebrew cask symlinks this path).
+.It Pa OhMyDock.app/Contents/Helpers/dockutil
+Bundled dockutil helper used for Dock mutations.
+.El
+.Sh GLOBAL OPTIONS
+Global flags may appear before or after the subcommand.
+.Bl -tag -width Ds
+.It Fl -json
+Emit one JSON document on stdout for success or failure.
+.It Fl -quiet
+Minimal stdout on success (see design: list still prints names when quiet).
+.It Fl -no-color
+Disable ANSI color on human output.
+.It Fl -no-color
+Also disabled when the
+.Ev NO_COLOR
+environment variable is set or stdout is not a TTY.
+.It Fl -yes
+Assume defaults; never prompt.
+Required together with
+.Fl -allow-quit
+when
+.Cm apply
+would quit apps.
+.It Fl -non-interactive
+Non-interactive mode (v0.3 never prompts; reserved for later).
+.It Fl -lock-timeout Ar seconds
+Lock acquire timeout in seconds;
+.Ar 0
+means try once.
+Default 180 unless overridden by
+.Ev OHMYDOCK_LOCK_TIMEOUT .
+.It Fl -version
+Print version and exit (same as
+.Cm version ) .
+.It Fl -help
+Print usage and exit 0.
+.El
+.Pp
+.Fl -allow-quit ,
+.Fl -dry-run ,
+.Fl -quit-scope ,
+and
+.Fl -keep-running
+are valid only on
+.Cm apply ;
+elsewhere they are usage errors (exit 2).
+.Sh COMMANDS
+.Bl -tag -width Ds
+.It Cm list
+List saved Dock profiles.
+.It Cm show Ar profile
+Show a profile document.
+.Ar profile
+is a name or UUID.
+.It Cm current
+Compare the live Dock to saved profiles.
+.It Cm apply Ar profile
+Apply a profile to the Dock.
+.Bl -tag -width Ds
+.It Fl -dry-run
+Preview without writing (exit 0 when preview computed).
+.It Fl -allow-quit
+Allow quitting apps (requires
+.Fl -yes ) .
+.It Fl -quit-scope Ar previous | all | none
+Override quit scope for this apply only.
+.It Fl -keep-running Ar bundleId
+Keep the given bundle ID running (repeatable).
+.El
+.It Cm save Ar name
+Save the current Dock as a profile.
+.Bl -tag -width Ds
+.It Fl -force
+Replace tiles of an existing profile with the same name.
+.It Fl -include-prefs
+Capture Dock preference keys onto the profile.
+.El
+.It Cm delete Ar profile
+Delete a saved profile (requires
+.Fl -yes ) .
+.It Cm rename Ar profile Ar new-name
+Rename a profile.
+.It Cm duplicate Ar profile Ar new-name
+Duplicate a profile under a new name.
+.It Cm undo
+Restore the previous Dock snapshot.
+.It Cm snapshots
+List snapshots (default subcommand).
+.It Cm history
+Alias for
+.Cm snapshots list .
+.It Cm snapshots Cm pin Ar id
+Pin a snapshot by UUID.
+.It Cm snapshots Cm unpin Ar id
+Unpin a snapshot.
+.It Cm snapshots Cm delete Ar id
+Delete a snapshot (requires
+.Fl -yes ) .
+.It Cm snapshots Cm restore Ar id
+Restore a snapshot (requires
+.Fl -yes ) .
+.It Cm restore Ar id
+Restore a snapshot (requires
+.Fl -yes ) .
+.It Cm export Ar profile
+Export a profile.
+.Bl -tag -width Ds
+.It Fl -format Ar json | script
+Output format (default
+.Cm json ) .
+.It Fl -output Ar file
+Write to a file instead of stdout.
+.It Fl -force
+Overwrite an existing output file.
+.El
+.It Cm import Ar file
+Import a profile file, or a single hyphen for stdin (must be piped, not a TTY).
+.Bl -tag -width Ds
+.It Fl -name Ar name
+Use this name when the sanitized name is taken.
+.El
+.It Cm status
+Report app, lock, and active profile status.
+.It Cm doctor
+Run environment checks (exit 0 when no check failed).
+.It Cm version
+Print oh-my-dock version.
+.It Cm completions Ar zsh | bash | fish
+Print a shell completion script.
+Does not support
+.Fl -json
+(exit 2).
+.El
+.Sh EXIT STATUS
+.Bl -tag -width Ds
+.It 0
+Success, including idempotent
+.Cm apply
+with
+.Va noChanges .
+.It 1
+Internal error
+.Pq Va error.code No internal .
+.It 2
+Usage error
+.Pq Va error.code No usage ,
+bad arguments, unknown command,
+.Fl -allow-quit
+off
+.Cm apply ,
+TTY stdin import,
+relative
+.Ev OHMYDOCK_SUPPORT_DIR ,
+.Cm completions
+with
+.Fl -json .
+.It 3
+Not found
+.Pq Va error.code No notFound ;
+undo with nothing to undo uses
+.Va nothingToUndo .
+.It 4
+Ambiguous profile name
+.Pq Va error.code No ambiguous .
+.It 5
+Needs confirmation
+.Pq Va error.code No needsConfirmation :
+apply would quit or skip apps without required flags.
+Nothing is written.
+.It 6
+Conflict
+.Pq Va error.code No conflict :
+name in use, export refused, invalid profile, etc.
+.It 7
+Busy
+.Pq Va error.code No locked :
+operation or preview lock held.
+.It 8
+Apply failed and rolled back
+.Pq Va rolledBack
+or rollback failed
+.Pq Va rollbackFailed .
+.It 130
+Interrupted
+.Pq Dv SIGINT ;
+apply may roll back first.
+.El
+.Pp
+Validation errors from ArgumentParser map to exit 2, not 64.
+.Sh EXAMPLES
+List profiles as JSON:
+.Pp
+.Dl ohmydock --json list
+.Pp
+Dry-run an apply before switching:
+.Pp
+.Dl ohmydock apply Work --dry-run --json
+.Pp
+Apply without quitting apps:
+.Pp
+.Dl ohmydock apply Work --quit-scope none --yes
+.Pp
+Install zsh completions:
+.Pp
+.Dl eval "$(ohmydock completions zsh)"
+.Pp
+.Dl eval "$(ohmydock completions bash)"
+.Pp
+.Dl ohmydock completions fish | source
+.Sh SEE ALSO
+.Lk https://github.com/Farzin-Firoozi/oh-my-dock oh-my-dock on GitHub
