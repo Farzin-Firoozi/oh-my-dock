@@ -30,9 +30,15 @@ struct EditorWindow: View {
 
     /// The store is the app-wide `ProfileStore`, so editor edits and other writers see the same files.
     /// `gate` is the app-wide Dock operation gate; previews run through it.
-    init(store: any EditorProfileStore, previewer: any DockPrefsPreviewing, gate: DockOperationGate, quit: PreviewQuitCoordinator) {
+    init(
+        store: any EditorProfileStore,
+        previewer: any DockPrefsPreviewing,
+        gate: DockOperationGate,
+        profileStoreChanges: DockChangeSignal,
+        quit: PreviewQuitCoordinator
+    ) {
         self.quit = quit
-        let editor = EditorViewModel(store: store)
+        let editor = EditorViewModel(store: store, gate: gate, storeChanges: profileStoreChanges)
         _model = State(initialValue: editor)
         _panel = State(initialValue: PrefsPanelViewModel(
             previewer: previewer,
@@ -79,6 +85,19 @@ struct EditorWindow: View {
             Button("OK", role: .cancel) {}
         } message: {
             Text(model.error?.errorDescription ?? "")
+        }
+        .alert(
+            "Profile changed on disk",
+            isPresented: Binding(
+                get: { model.storeConflict != nil },
+                set: { if !$0 { model.dismissStoreConflict() } }
+            )
+        ) {
+            Button("Reload") { Task { await model.reloadOpenProfileFromDisk() } }
+            Button("Keep mine") { Task { await model.keepLocalProfileDespiteConflict() } }
+            Button("Cancel", role: .cancel) { model.dismissStoreConflict() }
+        } message: {
+            Text(model.storeConflict ?? "")
         }
     }
 

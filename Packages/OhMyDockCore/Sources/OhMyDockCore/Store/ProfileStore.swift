@@ -135,6 +135,12 @@ public actor ProfileStore {
         return try update(id: id) { $0.hotkey = hotkey }
     }
 
+    public func contentModificationDate(for id: UUID) throws -> Date? {
+        let url = profileURL(for: id)
+        guard fileManager.fileExists(atPath: url.path) else { return nil }
+        return try url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate
+    }
+
     public func delete(id: UUID) throws {
         let url = profileURL(for: id)
         guard fileManager.fileExists(atPath: url.path) else {

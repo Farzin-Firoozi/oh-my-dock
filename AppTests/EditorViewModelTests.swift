@@ -7,6 +7,7 @@ actor FakeStore: EditorProfileStore {
     var deleted: [UUID] = []
     var saveCount = 0
     var failNextSave = false
+    private var modificationDates: [UUID: Date] = [:]
 
     init(_ profiles: [Profile] = []) {
         saved = Dictionary(uniqueKeysWithValues: profiles.map { ($0.id, $0) })
@@ -25,6 +26,11 @@ actor FakeStore: EditorProfileStore {
         }
         saveCount += 1
         saved[profile.id] = profile
+        modificationDates[profile.id] = Date()
+    }
+
+    func profileFileModificationDate(for id: UUID) async throws -> Date? {
+        modificationDates[id]
     }
 
     func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) throws -> Profile {
@@ -36,12 +42,19 @@ actor FakeStore: EditorProfileStore {
         try transform(&profile)
         saveCount += 1
         saved[id] = profile
+        modificationDates[id] = Date()
         return profile
     }
 
     /// Changes a stored profile without going through the editor, like another writer would.
     func setStoredHotkey(_ id: UUID, _ hotkey: Hotkey?) {
         saved[id]?.hotkey = hotkey
+    }
+
+    func overwriteTiles(id: UUID, apps: [DockItem], others: [DockItem]) {
+        saved[id]?.apps = apps
+        saved[id]?.others = others
+        modificationDates[id] = Date().addingTimeInterval(10)
     }
 
     func delete(id: UUID) throws {
@@ -399,6 +412,36 @@ private func makeModel(_ profiles: [Profile] = []) async -> (EditorViewModel, Fa
         #expect(model.setPrefs(nil, for: id))
         await model.flush()
         #expect(await store.saved[id]?.prefs == nil)
+    }
+
+    @Test func externalOverwriteShowsConflictWhenEditorHasLocalEdits() async {
+        let profile = Profile(name: "Work", apps: [app("Safari")])
+        let store = FakeStore([profile])
+        let changes = DockChangeSignal()
+        let model = EditorViewModel(store: store, storeChanges: changes)
+        await model.load()
+        model.addSpacer(in: .apps)
+        await store.overwriteTiles(id: profile.id, apps: [app("Notes")], others: [])
+        changes.notify()
+        try? await Task.sleep(for: .milliseconds(10))
+        #expect(model.storeConflict != nil)
+        #expect(model.selectedProfile?.apps.count == 2)
+    }
+
+    @Test func externalOverwriteReloadsWhenEditorIsClean() async {
+        let profile = Profile(name: "Work", apps: [app("Safari")])
+        let store = FakeStore([profile])
+        let changes = DockChangeSignal()
+        let model = EditorViewModel(store: store, storeChanges: changes)
+        await model.load()
+        await store.overwriteTiles(id: profile.id, apps: [app("Notes")], others: [])
+        changes.notify()
+        try? await Task.sleep(for: .milliseconds(10))
+        #expect(model.storeConflict == nil)
+        guard case .app(let ref)? = model.selectedProfile?.apps.first else {
+            Issue.record("expected app tile"); return
+        }
+        #expect(ref.name == "Notes")
     }
 
     @Test func setPrefsRefusesInvalidValues() async {

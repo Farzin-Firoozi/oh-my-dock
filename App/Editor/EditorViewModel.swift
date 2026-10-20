@@ -11,9 +11,14 @@ protocol EditorProfileStore: Sendable {
     @discardableResult
     func update(id: UUID, _ transform: @Sendable (inout Profile) throws -> Void) async throws -> Profile
     func delete(id: UUID) async throws
+    func profileFileModificationDate(for id: UUID) async throws -> Date?
 }
 
-extension ProfileStore: EditorProfileStore {}
+extension ProfileStore: EditorProfileStore {
+    func profileFileModificationDate(for id: UUID) async throws -> Date? {
+        try contentModificationDate(for: id)
+    }
+}
 
 /// Stable handle for one tile of the selected profile. Tiles have no id of their own, so the
 /// handle is the tile's identity plus how many equal tiles (spacers of one kind) precede it.
@@ -29,6 +34,7 @@ enum EditorError: Error, Equatable, LocalizedError {
     case nameInUse(String)
     case noProfileSelected
     case persistence(String)
+    case storeConflict(String)
 
     var errorDescription: String? {
         switch self {
@@ -36,6 +42,7 @@ enum EditorError: Error, Equatable, LocalizedError {
         case .nameInUse(let name): "Another profile is already named \"\(name)\"."
         case .noProfileSelected: "Select a profile first."
         case .persistence(let message): "Couldn't save: \(message)"
+        case .storeConflict(let message): message
         }
     }
 
@@ -75,6 +82,8 @@ final class EditorViewModel {
     /// Profile files the store couldn't read.
     private(set) var skippedProfileCount = 0
     private(set) var error: EditorError?
+    /// Another process changed the open profile on disk while the editor has local edits.
+    private(set) var storeConflict: String?
 
     var selectedProfileID: UUID? {
         didSet {
@@ -84,13 +93,26 @@ final class EditorViewModel {
     var selectedItemID: EditorItemID?
 
     @ObservationIgnored private let store: any EditorProfileStore
+    @ObservationIgnored private weak var gate: DockOperationGate?
     @ObservationIgnored private var persistence: Task<Void, Never>?
     /// Bumped when a write fails. Writes queued under an older epoch were made against a state
     /// the failure invalidated, so they are dropped instead of replaying stale values.
     @ObservationIgnored private var writeEpoch = 0
+    @ObservationIgnored private var committed: [UUID: EditableSnapshot] = [:]
+    @ObservationIgnored private var diskStamp: [UUID: Date] = [:]
 
-    init(store: any EditorProfileStore) {
+    private struct EditableSnapshot: Equatable {
+        var name: String
+        var apps: [DockItem]
+        var others: [DockItem]
+    }
+
+    init(store: any EditorProfileStore, gate: DockOperationGate? = nil, storeChanges: DockChangeSignal? = nil) {
         self.store = store
+        self.gate = gate
+        storeChanges?.observe { [weak self] in
+            Task { await self?.handleStoreChanged() }
+        }
     }
 
     // MARK: - Derived state
@@ -115,6 +137,23 @@ final class EditorViewModel {
 
     func dismissError() { error = nil }
 
+    func dismissStoreConflict() { storeConflict = nil }
+
+    /// Reloads the open profile from disk after an external writer changed it.
+    func reloadOpenProfileFromDisk() async {
+        storeConflict = nil
+        guard let id = selectedProfileID else { return }
+        await reloadProfile(id)
+    }
+
+    /// Keeps the editor's in-memory tiles and attempts to save them over the newer on-disk file.
+    func keepLocalProfileDespiteConflict() async {
+        storeConflict = nil
+        guard let profile = selectedProfile else { return }
+        persistEdit(of: profile)
+        await flush()
+    }
+
     /// Resolves once every queued write has reached the store.
     func flush() async {
         await persistence?.value
@@ -129,6 +168,31 @@ final class EditorViewModel {
         sortProfiles()
         isLoaded = true
         if selectedProfile == nil { selectedProfileID = profiles.first?.id }
+        await refreshDiskState(for: profiles.map(\.id))
+    }
+
+    func handleStoreChanged() async {
+        let listed = await store.list()
+        skippedProfileCount = listed.failures.count
+        let known = Set(profiles.map(\.id))
+        let incoming = Set(listed.profiles.map(\.id))
+        if incoming != known {
+            profiles = listed.profiles
+            sortProfiles()
+            if let selectedProfileID, !incoming.contains(selectedProfileID) {
+                self.selectedProfileID = profiles.first?.id
+            }
+            await refreshDiskState(for: profiles.map(\.id))
+            return
+        }
+        guard let id = selectedProfileID else { return }
+        if hasLocalEdits(for: id) {
+            if let name = profiles.first(where: { $0.id == id })?.name {
+                storeConflict = "“\(name)” changed on disk while you were editing. Reload from disk or keep your version?"
+            }
+            return
+        }
+        await reloadProfile(id)
     }
 
     // MARK: - Profiles
@@ -389,11 +453,29 @@ final class EditorViewModel {
         let name = profile.name
         let apps = profile.apps
         let others = profile.others
+        let expectedStamp = diskStamp[id]
+        let gate = gate
         enqueue { store in
-            try await store.update(id: id) {
-                $0.name = name
-                $0.apps = apps
-                $0.others = others
+            let performWrite: @Sendable () async throws -> Void = {
+                if let expectedStamp,
+                   let diskDate = try await store.profileFileModificationDate(for: id),
+                   diskDate > expectedStamp
+                {
+                    throw EditorError.storeConflict(
+                        "“\(name)” changed on disk while you were editing. Reload from disk or keep your version?"
+                    )
+                }
+                _ = try await store.update(id: id) {
+                    $0.name = name
+                    $0.apps = apps
+                    $0.others = others
+                }
+                await self.notePersisted(id: id, snapshot: EditableSnapshot(name: name, apps: apps, others: others))
+            }
+            if let gate {
+                try await gate.withExclusiveStoreWrite { try await performWrite() }
+            } else {
+                try await performWrite()
             }
         }
     }
@@ -409,11 +491,62 @@ final class EditorViewModel {
             guard epoch == self.writeEpoch else { return }
             do {
                 try await write(store)
+            } catch let conflict as EditorError {
+                if case .storeConflict(let message) = conflict {
+                    self.writeEpoch += 1
+                    self.storeConflict = message
+                    return
+                }
+                self.writeEpoch += 1
+                self.error = conflict
+                await self.load()
             } catch {
                 self.writeEpoch += 1
                 self.error = .persistence((error as? LocalizedError)?.errorDescription ?? String(describing: error))
                 await self.load()
             }
+        }
+    }
+
+    private func editableSnapshot(_ profile: Profile) -> EditableSnapshot {
+        EditableSnapshot(name: profile.name, apps: profile.apps, others: profile.others)
+    }
+
+    private func hasLocalEdits(for id: UUID) -> Bool {
+        if persistence != nil { return true }
+        guard let profile = profiles.first(where: { $0.id == id }),
+              let baseline = committed[id]
+        else { return false }
+        return editableSnapshot(profile) != baseline
+    }
+
+    private func reloadProfile(_ id: UUID) async {
+        let listed = await store.list()
+        guard let profile = listed.profiles.first(where: { $0.id == id }) else { return }
+        if let index = profiles.firstIndex(where: { $0.id == id }) {
+            profiles[index] = profile
+        }
+        committed[id] = editableSnapshot(profile)
+        if let date = try? await store.profileFileModificationDate(for: id) {
+            diskStamp[id] = date
+        }
+    }
+
+    private func refreshDiskState(for ids: [UUID]) async {
+        for id in ids {
+            if let profile = profiles.first(where: { $0.id == id }) {
+                committed[id] = editableSnapshot(profile)
+            }
+            if let date = try? await store.profileFileModificationDate(for: id) {
+                diskStamp[id] = date
+            }
+        }
+    }
+
+    private func notePersisted(id: UUID, snapshot: EditableSnapshot) async {
+        committed[id] = snapshot
+        if let date = try? await store.profileFileModificationDate(for: id) {
+            diskStamp[id] = date
         }
     }
 

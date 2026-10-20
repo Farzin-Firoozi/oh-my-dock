@@ -20,6 +20,7 @@ enum AppEnvironment {
         let previewQuit: PreviewQuitCoordinator
         let urlRouter: OhMyDockURLRouter
         let intentDependencies: IntentDependencies
+        let profileStoreChanges: DockChangeSignal
     }
 
     /// Builds the one set of services (profile store, snapshot store, restarter, gate) the whole
@@ -28,6 +29,7 @@ enum AppEnvironment {
         let fileLocks = try! OperationLock()
         let gate = DockOperationGate(fileLocks: fileLocks)
         let changes = DockChangeSignal()
+        let profileStoreChanges = DockChangeSignal()
         let profiles = ProfileStore(rootDirectory: ProfileStore.defaultDirectory())
         let snapshots = SnapshotStore()
         let restarter = LiveDockRestarter()
@@ -112,6 +114,7 @@ enum AppEnvironment {
 
         let watcher = StoreChangeWatcher {
             changes.notify()
+            profileStoreChanges.notify()
             Task { await menuBar.refresh() }
         }
         watcher.start()
@@ -141,7 +144,8 @@ enum AppEnvironment {
             prefsPreviewer: LivePrefsPreviewer(writer: prefsWriter, snapshots: snapshots, restarter: restarter),
             previewQuit: PreviewQuitCoordinator(),
             urlRouter: urlRouter,
-            intentDependencies: intentDependencies
+            intentDependencies: intentDependencies,
+            profileStoreChanges: profileStoreChanges
         )
     }
 

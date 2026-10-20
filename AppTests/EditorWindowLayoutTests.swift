@@ -21,6 +21,7 @@ private actor LayoutFakeStore: EditorProfileStore {
         return copy
     }
     func delete(id: UUID) throws {}
+    func profileFileModificationDate(for id: UUID) async throws -> Date? { nil }
 }
 
 /// Drives AppKit layout the way a display cycle would; returns the worst single-cycle constraint pass count.
@@ -63,6 +64,7 @@ private func hostEditor(plainStrip: Bool) async -> NSWindow {
         store: LayoutFakeStore(profile: profile),
         previewer: LayoutFakePreviewer(),
         gate: DockOperationGate(),
+        profileStoreChanges: DockChangeSignal(),
         quit: PreviewQuitCoordinator()
     )
     let host = NSHostingController(rootView: view)

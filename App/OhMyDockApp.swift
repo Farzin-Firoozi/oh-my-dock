@@ -38,7 +38,15 @@ struct OhMyDockApp: App {
             SettingsView(model: shell.settings, updates: shell.updates)
         }
 
-        Window("Editor", id: "editor") { EditorWindow(store: shell.profiles, previewer: shell.prefsPreviewer, gate: shell.gate, quit: shell.previewQuit) }
+        Window("Editor", id: "editor") {
+            EditorWindow(
+                store: shell.profiles,
+                previewer: shell.prefsPreviewer,
+                gate: shell.gate,
+                profileStoreChanges: shell.profileStoreChanges,
+                quit: shell.previewQuit
+            )
+        }
         .defaultSize(width: 900, height: 600)
 
         Window("History", id: "history") { HistoryWindow(model: shell.history) }
