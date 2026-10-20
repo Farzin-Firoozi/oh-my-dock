@@ -26,3 +26,15 @@ The license text ships inside the app at `OhMyDock.app/Contents/Resources/ThirdP
 
 ### Redistribution Statement
 `KeyboardShortcuts` is a Swift package linked into the app for global hotkeys and the shortcut recorder. The license text ships inside the app at `OhMyDock.app/Contents/Resources/ThirdParty/KeyboardShortcuts/LICENSE`.
+
+
+## swift-argument-parser
+
+- **Name:** swift-argument-parser
+- **URL:** https://github.com/apple/swift-argument-parser
+- **Version:** 1.5.0 (Swift Package Manager minimum)
+- **License:** Apache-2.0
+- **License Path:** [ThirdParty/swift-argument-parser/LICENSE](ThirdParty/swift-argument-parser/LICENSE)
+
+### Redistribution Statement
+`swift-argument-parser` is a Swift package linked into the `ohmydock` CLI tool only. The license text ships inside the app at `OhMyDock.app/Contents/Resources/ThirdParty/swift-argument-parser/LICENSE`.

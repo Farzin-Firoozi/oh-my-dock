@@ -47,6 +47,15 @@ targets:
           copyFiles:
             destination: resources
             subpath: ThirdParty/KeyboardShortcuts
+      - path: ThirdParty/swift-argument-parser/LICENSE
+        buildPhase:
+          copyFiles:
+            destination: resources
+            subpath: ThirdParty/swift-argument-parser
+      - path: CLI/ohmydock.1
+        buildPhase:
+          copyFiles:
+            destination: resources
       - path: THIRD_PARTY_NOTICES.md
         buildPhase: resources
     dependencies:
