@@ -384,7 +384,7 @@ Dates are ISO-8601 UTC with fractional seconds (`2026-10-20T15:04:05.000Z`). UUI
 
 **export** — with no `--output`, stdout is the document itself in human mode (not wrapped). With `--json` and no `--output`, `result.format` is `json` or `script` and `result.document` is the string. With `--output`, both modes write the file and the JSON `result` is `{ "format", "path" }` (the document is not also inlined).
 
-**status** — the fields in §3. **doctor** — `{ "checks": [{ "name", "status": "pass"|"warn"|"fail", "detail": "…" }] }`. **version** — `{ "version": "0.2.0" }` using `OhMyDockCore.version`.
+**status** — the fields in §3. **doctor** — `{ "checks": [{ "name", "status": "pass"|"warn"|"fail", "detail": "…" }] }`. **version** — `{ "version": "0.3.0" }` using `OhMyDockCore.version`.
 
 ### Environment
 

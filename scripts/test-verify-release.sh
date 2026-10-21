@@ -32,7 +32,7 @@ write_fake_plist() {
 	<key>CFBundleExecutable</key>
 	<string>OhMyDock</string>
 	<key>CFBundleShortVersionString</key>
-	<string>0.2.0</string>
+	<string>0.3.0</string>
 	<key>LSMinimumSystemVersion</key>
 	<string>14.0</string>
 	<key>LSUIElement</key>
@@ -59,7 +59,7 @@ write_fake_helpers() {
   cat << 'EOF' > "${FAKE_APP}/Contents/Helpers/ohmydock"
 #!/bin/sh
 if [ "$1" = "version" ] && [ "$2" = "--json" ]; then
-  printf '%s\n' '{"schemaVersion":1,"command":"version","ok":true,"result":{"version":"0.2.0"}}'
+  printf '%s\n' '{"schemaVersion":1,"command":"version","ok":true,"result":{"version":"0.3.0"}}'
   exit 0
 fi
 exit 1

@@ -4,7 +4,7 @@ import Testing
 
 @Suite struct OhMyDockCoreTests {
     @Test func versionIsSet() {
-        #expect(OhMyDockCore.version == "0.2.0")
+        #expect(OhMyDockCore.version == "0.3.0")
     }
 }
 

@@ -55,14 +55,15 @@ import Testing
             """
             import fcntl, time
             f = open('\(lockURL.path)', 'a')
-            fcntl.flock(f.fileno(), fcntl.LOCK_EX)
+            fcntl.lockf(f.fileno(), fcntl.LOCK_EX)
             time.sleep(4)
             """,
         ]
         try process.run()
-        try await Task.sleep(for: .milliseconds(300))
-
         let probe = try OperationLock(supportRoot: root)
+        for _ in 0..<50 where !probe.isOperationHeld() {
+            try await Task.sleep(for: .milliseconds(100))
+        }
         #expect(probe.isOperationHeld())
 
         process.terminate()

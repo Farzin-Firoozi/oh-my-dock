@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 0.3.0
 
 - **`ohmydock` CLI**: headless control of profiles and the Dock (`list`, `show`, `current`, `apply`, `save`, `delete`, `rename`, `duplicate`, `undo`, snapshots/history, `restore`, `export`, `import`, `status`, `doctor`, `version`, shell `completions`). JSON envelope (`schemaVersion` 1), documented exit codes, `--dry-run` apply, quit flags requiring explicit `--allow-quit` and `--yes`.
 - **URL scheme** `ohmydock://` for apply, save, undo, and open (editor/history/settings); optional x-callback-url; first-use **Allow external control** consent for mutating URLs.
